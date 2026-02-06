@@ -7,6 +7,7 @@ defmodule Dantzig.HiGHS do
   alias Dantzig.ProblemVariable
   alias Dantzig.Solution
   alias Dantzig.Polynomial
+  import Guards
 
   @max_random_prefix 2 ** 32
 
@@ -44,39 +45,37 @@ defmodule Dantzig.HiGHS do
   end
 
   defp build_highs_args(model_path, solution_path, options_path, opts) do
-    time_limit = Keyword.get(opts, :time_limit)
     options_file_content = build_options_file_content(opts)
 
-    args = [model_path, "--solution_file", solution_path]
+    [model_path, "--solution_file", solution_path]
+    |> maybe_add_arg("--time_limit", Keyword.get(opts, :time_limit))
+    |> maybe_add_options_file(options_file_content, options_path)
 
-    args =
-      if time_limit do
-        args ++ ["--time_limit", to_string(time_limit)]
-      else
-        args
-      end
-
-    if options_file_content != "" do
-      File.write!(options_path, options_file_content)
-      args ++ ["--options_file", options_path]
-    else
-      args
-    end
   end
+
+  defp maybe_add_arg(args, key, value) when is_present?(value), do: args ++ [key, to_string(value)]
+  defp maybe_add_arg(args, _, _), do: args
 
   defp build_options_file_content(opts) do
     # Options that must be passed via options file (not CLI args)
-    file_options = [:mip_rel_gap, :mip_abs_gap]
+    file_options = [:mip_rel_gap, :log_to_console]
 
     (
       for key <- file_options,
           value = Keyword.get(opts, key),
-          not is_nil(value) do
+          is_present?(value) do
         "#{key} = #{value}"
       end
     )
     |> Enum.join("\n")
   end
+
+  defp maybe_add_options_file(args, file_content, options_path) when is_present?(file_content) do
+    File.write!(options_path, file_content)
+    args ++ ["--options_file", options_path]
+  end
+
+  defp maybe_add_options_file(args, _, _), do: args
 
   defp indent(iodata, indent_level) do
     binary = to_string(iodata)
