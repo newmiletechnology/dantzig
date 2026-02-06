@@ -10,20 +10,16 @@ defmodule Dantzig.HiGHS do
 
   @max_random_prefix 2 ** 32
 
-  def solve(%Problem{} = problem) do
+  def solve(%Problem{} = problem, opts \\ []) do
     iodata = to_lp_iodata(problem)
 
-    command = Config.default_highs_binary_path()
+    command = Config.get_highs_binary_path()
 
-    with_temporary_files(["model.lp", "solution.lp"], fn [model_path, solution_path] ->
+    with_temporary_files(["model.lp", "solution.lp", "options.txt"], fn [model_path, solution_path, options_path] ->
       File.write!(model_path, iodata)
 
-      {output, _error_code} =
-        System.cmd(command, [
-          model_path,
-          "--solution_file",
-          solution_path
-        ])
+      args = build_highs_args(model_path, solution_path, options_path, opts)
+      {output, _error_code} = System.cmd(command, args)
 
       solution_contents =
         case File.read(solution_path) do
@@ -45,6 +41,41 @@ defmodule Dantzig.HiGHS do
 
       Solution.from_file_contents(solution_contents)
     end)
+  end
+
+  defp build_highs_args(model_path, solution_path, options_path, opts) do
+    time_limit = Keyword.get(opts, :time_limit)
+    options_file_content = build_options_file_content(opts)
+
+    args = [model_path, "--solution_file", solution_path]
+
+    args =
+      if time_limit do
+        args ++ ["--time_limit", to_string(time_limit)]
+      else
+        args
+      end
+
+    if options_file_content != "" do
+      File.write!(options_path, options_file_content)
+      args ++ ["--options_file", options_path]
+    else
+      args
+    end
+  end
+
+  defp build_options_file_content(opts) do
+    # Options that must be passed via options file (not CLI args)
+    file_options = [:mip_rel_gap, :mip_abs_gap]
+
+    (
+      for key <- file_options,
+          value = Keyword.get(opts, key),
+          not is_nil(value) do
+        "#{key} = #{value}"
+      end
+    )
+    |> Enum.join("\n")
   end
 
   defp indent(iodata, indent_level) do

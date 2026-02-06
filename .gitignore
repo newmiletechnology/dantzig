@@ -29,3 +29,6 @@ dantzig-*.tar
 /priv/bin/
 
 *.log
+
+# VSCode settings
+.vscode/

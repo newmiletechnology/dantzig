@@ -6,12 +6,12 @@ defmodule Dantzig do
   alias Dantzig.HiGHS
   alias Dantzig.Problem
 
-  def solve(%Problem{} = problem) do
-    HiGHS.solve(problem)
+  def solve(%Problem{} = problem, opts \\ []) do
+    HiGHS.solve(problem, opts)
   end
 
-  def solve!(%Problem{} = problem) do
-    {:ok, solution} = HiGHS.solve(problem)
+  def solve!(%Problem{} = problem, opts \\ []) do
+    {:ok, solution} = HiGHS.solve(problem, opts)
     solution
   end
 
