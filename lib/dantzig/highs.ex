@@ -7,23 +7,20 @@ defmodule Dantzig.HiGHS do
   alias Dantzig.ProblemVariable
   alias Dantzig.Solution
   alias Dantzig.Polynomial
+  import Guards
 
   @max_random_prefix 2 ** 32
 
-  def solve(%Problem{} = problem) do
+  def solve(%Problem{} = problem, opts \\ []) do
     iodata = to_lp_iodata(problem)
 
-    command = Config.default_highs_binary_path()
+    command = Config.get_highs_binary_path()
 
-    with_temporary_files(["model.lp", "solution.lp"], fn [model_path, solution_path] ->
+    with_temporary_files(["model.lp", "solution.lp", "options.txt"], fn [model_path, solution_path, options_path] ->
       File.write!(model_path, iodata)
 
-      {output, _error_code} =
-        System.cmd(command, [
-          model_path,
-          "--solution_file",
-          solution_path
-        ])
+      args = build_highs_args(model_path, solution_path, options_path, opts)
+      {output, _error_code} = System.cmd(command, args)
 
       solution_contents =
         case File.read(solution_path) do
@@ -46,6 +43,39 @@ defmodule Dantzig.HiGHS do
       Solution.from_file_contents(solution_contents)
     end)
   end
+
+  defp build_highs_args(model_path, solution_path, options_path, opts) do
+    options_file_content = build_options_file_content(opts)
+
+    [model_path, "--solution_file", solution_path]
+    |> maybe_add_arg("--time_limit", Keyword.get(opts, :time_limit))
+    |> maybe_add_options_file(options_file_content, options_path)
+
+  end
+
+  defp maybe_add_arg(args, key, value) when is_present?(value), do: args ++ [key, to_string(value)]
+  defp maybe_add_arg(args, _, _), do: args
+
+  defp build_options_file_content(opts) do
+    # Options that must be passed via options file (not CLI args)
+    file_options = [:mip_rel_gap, :log_to_console]
+
+    (
+      for key <- file_options,
+          value = Keyword.get(opts, key),
+          is_present?(value) do
+        "#{key} = #{value}"
+      end
+    )
+    |> Enum.join("\n")
+  end
+
+  defp maybe_add_options_file(args, file_content, options_path) when is_present?(file_content) do
+    File.write!(options_path, file_content)
+    args ++ ["--options_file", options_path]
+  end
+
+  defp maybe_add_options_file(args, _, _), do: args
 
   defp indent(iodata, indent_level) do
     binary = to_string(iodata)
