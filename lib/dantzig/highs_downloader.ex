@@ -65,6 +65,7 @@ defmodule Dantzig.HiGHSDownloader do
       other -> raise "couldn't unpack archive: #{inspect(other)}"
     end
 
+    bin_path = Path.join([tmp_dir, "bin", "highs"])
     dst_path = Config.get_highs_binary_path()
 
     # Create the destination directory if
