@@ -67,7 +67,7 @@ defmodule Dantzig.HiGHSDownloader do
 
     bin_path = Path.join([tmp_dir, "bin", "highs"])
 
-    dst_path = Config.default_highs_binary_path()
+    dst_path = Config.get_highs_binary_path()
 
     # Create the destination directory if
     # it does not exist

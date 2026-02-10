@@ -11,7 +11,7 @@ defmodule Dantzig.Config do
   end
 
   def read_downloaded_version() do
-    bin_path = default_highs_binary_path()
+    bin_path = get_highs_binary_path()
     bin_dir = Path.dirname(bin_path)
     vsn_path = Path.join(bin_dir, @highs_version_file_basename)
 
@@ -22,7 +22,7 @@ defmodule Dantzig.Config do
   end
 
   def persist_downloaded_version(version) do
-    bin_path = default_highs_binary_path()
+    bin_path = get_highs_binary_path()
     bin_dir = Path.dirname(bin_path)
     vsn_path = Path.join(bin_dir, @highs_version_file_basename)
 
