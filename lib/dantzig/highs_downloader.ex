@@ -65,7 +65,56 @@ defmodule Dantzig.HiGHSDownloader do
       other -> raise "couldn't unpack archive: #{inspect(other)}"
     end
 
-    bin_path = Path.join([tmp_dir, "bin", "highs"])
+    # CHANGES
+    # Try to find the binary in common locations
+    possible_bin_paths = [
+      Path.join([tmp_dir, "bin", "highs"]),
+      Path.join([tmp_dir, "highs"]),
+      Path.join([tmp_dir, "lib", "highs"])
+    ]
+
+    bin_path =
+      Enum.find(possible_bin_paths, fn path ->
+        File.exists?(path)
+      end)
+
+    if is_nil(bin_path) do
+      # If we can't find the binary, list what was actually extracted
+      extracted_info =
+        case File.ls(tmp_dir) do
+          {:ok, files} ->
+            files_str = Enum.join(files, ", ")
+
+            # Also try to list subdirectories
+            subdirs =
+              Enum.filter(files, fn file ->
+                tmp_dir |> Path.join(file) |> File.dir?()
+              end)
+
+            subdir_contents =
+              Enum.map(subdirs, fn dir ->
+                dir_path = Path.join(tmp_dir, dir)
+                case File.ls(dir_path) do
+                  {:ok, subfiles} -> "#{dir}/ contains: #{Enum.join(subfiles, ", ")}"
+                  _ -> "#{dir}/ (could not list)"
+                end
+              end)
+              |> Enum.join("\n  ")
+
+            "Files in temp directory: #{files_str}\n  #{subdir_contents}"
+
+          {:error, reason} ->
+            "Could not list temp directory: #{inspect(reason)}"
+        end
+
+      raise """
+      Could not find HiGHS binary after extraction.
+      Checked paths: #{inspect(possible_bin_paths)}
+
+      #{extracted_info}
+      """
+    end
+    # CHANGES
 
     dst_path = Config.get_highs_binary_path()
 
@@ -78,6 +127,9 @@ defmodule Dantzig.HiGHSDownloader do
     # (overwriting previously written files if needed)
     Config.persist_downloaded_version(version)
     File.cp!(bin_path, dst_path)
+
+    # Make the binary executable
+    File.chmod!(dst_path, 0o755)
 
     :ok
   end
