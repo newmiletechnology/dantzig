@@ -52,7 +52,7 @@ defmodule Dantzig.HiGHSDownloader do
     unpacked =
       :erl_tar.extract({:binary, tar_archive}, [
         :compressed,
-        files: ["bin/highs"],
+        files: [~c"bin/highs"],
         cwd: to_charlist(tmp_dir)
       ])
 
@@ -66,8 +66,7 @@ defmodule Dantzig.HiGHSDownloader do
     end
 
     bin_path = Path.join([tmp_dir, "bin", "highs"])
-
-    dst_path = Config.default_highs_binary_path()
+    dst_path = Config.get_highs_binary_path()
 
     # Create the destination directory if
     # it does not exist
@@ -78,6 +77,9 @@ defmodule Dantzig.HiGHSDownloader do
     # (overwriting previously written files if needed)
     Config.persist_downloaded_version(version)
     File.cp!(bin_path, dst_path)
+
+    # Make the binary executable
+    File.chmod!(dst_path, 0o755)
 
     :ok
   end
