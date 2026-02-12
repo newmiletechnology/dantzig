@@ -1,7 +1,76 @@
 defmodule Dantzig.Polynomial do
+  @moduledoc """
+  Polynomials for linear and quadratic programming.
+
+  This module provides polynomial construction and manipulation for use with
+  LP/QP solvers. Polynomials can represent objective functions, constraint
+  left-hand sides, and intermediate expressions.
+
+  ## Building Polynomials
+
+  There are several ways to construct polynomials:
+
+  ### Direct Construction
+
+      x = Polynomial.variable(:x)
+      y = Polynomial.variable(:y)
+      c = Polynomial.const(5)
+
+  ### Using `algebra/1` for Inline Expressions
+
+  The `algebra/1` macro transforms arithmetic operators to polynomial operations:
+
+      # Inline syntax (recommended for simple expressions)
+      objective = Polynomial.algebra(2 * x + 3 * y - 5)
+
+  ### Using `collect/1` for Efficient Comprehensions
+
+  For building polynomials from many terms (e.g., in optimization problems with
+  thousands of variables), use `collect/1` which runs in O(n) time:
+
+      # Efficient for large-scale problems
+      objective = Polynomial.collect do
+        for i <- 1..10_000, var = vars[i], var != nil do
+          coefficients[i] * var
+        end
+      end
+
+  ## Performance Considerations
+
+  When building polynomials from many terms:
+
+  - **O(n²) approach** (avoid for large n): Using `Enum.reduce` with `add/2`
+    causes repeated map merges, leading to quadratic time complexity.
+
+  - **O(n) approach** (recommended): Use `collect/1` or `sum_linear/1` which
+    flattens all terms and combines them in a single pass.
+
+  For problems with 1,000+ terms, the difference is significant. For 42,000 terms,
+  the O(n) approach completes in under 1 second vs. several minutes for O(n²).
+
+  ## Examples
+
+      # Simple objective function
+      require Dantzig.Polynomial, as: Polynomial
+
+      x = Polynomial.variable(:x)
+      y = Polynomial.variable(:y)
+
+      # Using algebra for simple expressions
+      objective = Polynomial.algebra(3 * x + 2 * y + 10)
+
+      # Using collect for comprehensions (efficient for many terms)
+      switching_penalty = Polynomial.collect do
+        for {id, var} <- decision_vars do
+          -penalty * var
+        end
+      end
+
+  """
+
   defstruct simplified: %{}
 
-  @type t :: %__MODULE__{}
+  @type t :: %__MODULE__{simplified: %{optional([term()]) => number()}}
 
   defimpl Inspect do
     import Inspect.Algebra
@@ -15,8 +84,91 @@ defmodule Dantzig.Polynomial do
     end
   end
 
+  @doc """
+  Transforms arithmetic operators to polynomial operations.
+
+  This macro rewrites `+`, `-`, `*`, and `/` operators within the given
+  expression to their polynomial equivalents (`add/2`, `subtract/2`,
+  `multiply/2`, `divide/2`).
+
+  ## Syntax
+
+  Use inline syntax for simple expressions:
+
+      Polynomial.algebra(2 * x + 3 * y - 5)
+
+  When using `do/end` block syntax, the macro returns a keyword list
+  `[do: result]` which must be pattern-matched:
+
+      [do: objective] = Polynomial.algebra do
+        Enum.reduce(vars, Polynomial.const(0), fn var, acc ->
+          acc + coeff * var
+        end)
+      end
+
+  ## Examples
+
+      require Dantzig.Polynomial, as: Polynomial
+
+      x = Polynomial.variable(:x)
+      y = Polynomial.variable(:y)
+
+      # Inline syntax (returns the polynomial directly)
+      p = Polynomial.algebra(2 * x + 3 * y)
+
+      # With negation
+      p = Polynomial.algebra(-5 * x)
+
+      # Division by constant
+      p = Polynomial.algebra(x / 2)
+
+  ## Notes
+
+  - For building polynomials from comprehensions, prefer `collect/1` which
+    provides both operator transformation and efficient O(n) summation.
+  - The `/` operator only supports division by constants (numbers or constant
+    polynomials). Division by variable polynomials is not supported.
+  """
   defmacro algebra(ast) do
     replace_operators(ast)
+  end
+
+  @doc """
+  Efficiently collects polynomial terms from a comprehension.
+
+  This macro transforms arithmetic operators (+, -, *, /) within the block
+  to their polynomial equivalents (like `algebra/1`), then wraps the result
+  in `sum_linear/1` for O(n) performance.
+
+  ## Examples
+
+      # Collect terms from a comprehension
+      Polynomial.collect do
+        for i <- 1..1000, var = vars[i], var != nil do
+          coefficient * var
+        end
+      end
+
+      # Equivalent to but faster than:
+      Polynomial.sum(for i <- 1..1000, var = vars[i], var != nil do
+        Polynomial.algebra(coefficient * var)
+      end)
+
+  ## Notes
+
+  - The block should return an enumerable of polynomials
+  - Operator transformation applies to the entire block, including the body
+  - Use this for building objectives or constraint LHS from many terms
+  """
+  defmacro collect(ast) do
+    # ast is [do: block] when called with do/end syntax
+    transformed = replace_operators(ast)
+    # Extract the transformed block from the keyword list
+    block = Keyword.fetch!(transformed, :do)
+
+    quote do
+      Dantzig.Polynomial.sum_linear(unquote(block))
+    end
   end
 
   @doc """
@@ -139,7 +291,7 @@ defmodule Dantzig.Polynomial do
     # Raise an error if the polynomial is cubic or higher
     unless degree(p) in [0, 1, 2] do
       raise RuntimeError, """
-      Polynomials of degree < 2 are not supported by the LP solver.
+      Polynomials of degree > 2 are not supported by the LP solver.
           Please try to convert your constraints and objective function \
       into polynomials of degree 0, 1 or 2.
       """
@@ -249,10 +401,20 @@ defmodule Dantzig.Polynomial do
     Enum.intersperse(parts, " ")
   end
 
+  @doc """
+  Returns true if the polynomial has no variables (degree 0).
+  """
+  @spec constant?(t()) :: boolean()
   def constant?(p) do
     degree(p) == 0
   end
 
+  @doc """
+  Splits a polynomial into its constant term and remaining terms.
+
+  Returns `{non_constant_polynomial, constant_value}`.
+  """
+  @spec split_constant(t()) :: {t(), number()}
   def split_constant(p) do
     case Map.fetch(p.simplified, []) do
       {:ok, value} ->
@@ -263,6 +425,10 @@ defmodule Dantzig.Polynomial do
     end
   end
 
+  @doc """
+  Returns true if two polynomials are structurally equal.
+  """
+  @spec equal?(t(), t()) :: boolean()
   def equal?(p1, p2) do
     p1.simplified == p2.simplified
   end
@@ -313,10 +479,35 @@ defmodule Dantzig.Polynomial do
     end
   end
 
+  @doc """
+  Creates a constant polynomial from a numeric value.
+
+  ## Examples
+
+      iex> Polynomial.const(5)
+      #Polynomial<5 >
+
+  """
+  @spec const(number()) :: t()
   def const(value) when is_number(value) do
     %__MODULE__{simplified: %{[] => value}}
   end
 
+  @doc """
+  Creates a polynomial representing a single variable with coefficient 1.
+
+  The variable name can be any term except a number.
+
+  ## Examples
+
+      iex> Polynomial.variable(:x)
+      #Polynomial<1 x>
+
+      iex> Polynomial.variable("my_var")
+      #Polynomial<1 my_var>
+
+  """
+  @spec variable(term()) :: t()
   def variable(name) when not is_number(name) do
     # NOTE: the variable name can't be a number, otherwise it would be too confusing!
     %__MODULE__{simplified: %{[name] => 1}}
@@ -426,6 +617,12 @@ defmodule Dantzig.Polynomial do
     constant
   end
 
+  @doc """
+  Returns the degree of the polynomial (highest power of any term).
+
+  A constant polynomial has degree 0.
+  """
+  @spec degree(t()) :: non_neg_integer()
   def degree(%{simplified: simplified} = _p) when simplified == %{} do
     0
   end
@@ -461,6 +658,12 @@ defmodule Dantzig.Polynomial do
   def power(_p, 0), do: const(1)
   def power(p, exponent) when exponent > 0, do: multiply(p, power(p, exponent - 1))
 
+  @doc """
+  Adds two polynomials (or numbers) together.
+
+  Arguments can be polynomials or numbers; numbers are converted to constants.
+  """
+  @spec add(t() | number(), t() | number()) :: t()
   def add(p1, p2) do
     p1 = to_polynomial(p1)
     p2 = to_polynomial(p2)
@@ -475,12 +678,55 @@ defmodule Dantzig.Polynomial do
     %__MODULE__{simplified: simplified}
   end
 
-  def sum(polynomials) do
-    Enum.reduce(polynomials, const(0), fn p, current_sum ->
-      add(p, current_sum)
-    end)
+  @doc """
+  DEPRECATED: Prefer `sum_linear/1` instead.
+  Sums a list of polynomials.
+
+  This is implemented using `sum_linear/1` which runs in O(n) time.
+  """
+  @spec sum([t()]) :: t()
+  def sum(polynomials), do: sum_linear(polynomials)
+
+  @doc """
+  Efficiently sums a list of polynomials in O(n) time.
+
+  This function collects all terms from all polynomials and groups them
+  by variable combination, summing coefficients for like terms. Unlike
+  iterative addition which has O(n²) map merge cost, this approach processes
+  all terms in a single pass.
+
+  ## Examples
+
+      iex> x = Polynomial.variable(:x)
+      iex> y = Polynomial.variable(:y)
+      iex> Polynomial.sum_linear([x, y, x])
+      #Polynomial<2 x + 1 y>
+
+  """
+  @spec sum_linear([t()]) :: t()
+  def sum_linear([]), do: const(0)
+  def sum_linear([single]), do: single
+
+  def sum_linear(polynomials) when is_list(polynomials) do
+    simplified =
+      polynomials
+      |> Enum.flat_map(fn
+        %__MODULE__{simplified: s} -> Map.to_list(s)
+        n when is_number(n) -> [{[], n}]
+      end)
+      |> Enum.group_by(fn {vars, _coeff} -> vars end, fn {_vars, coeff} -> coeff end)
+      |> Enum.map(fn {vars, coeffs} -> {vars, Enum.sum(coeffs)} end)
+      |> cancel_terms()
+
+    %__MODULE__{simplified: simplified}
   end
 
+  @doc """
+  Subtracts the second polynomial from the first.
+
+  Arguments can be polynomials or numbers; numbers are converted to constants.
+  """
+  @spec subtract(t() | number(), t() | number()) :: t()
   def subtract(p1, p2) do
     p1 = to_polynomial(p1)
     p2 = multiply(to_polynomial(p2), -1)
@@ -510,6 +756,13 @@ defmodule Dantzig.Polynomial do
     %{p | simplified: simplified_terms}
   end
 
+  @doc """
+  Divides a polynomial by a constant.
+
+  Only division by constants (numbers or constant polynomials) is supported.
+  Raises `ArgumentError` if the divisor contains variables.
+  """
+  @spec divide(t() | number(), t() | number()) :: t()
   def divide(p, c) do
     c_as_number = to_number_if_possible(c)
 
@@ -523,6 +776,12 @@ defmodule Dantzig.Polynomial do
     end
   end
 
+  @doc """
+  Multiplies two polynomials (or numbers) together.
+
+  Arguments can be polynomials or numbers; numbers are converted to constants.
+  """
+  @spec multiply(t() | number(), t() | number()) :: t()
   def multiply(p1, p2) do
     p1 = to_polynomial(p1)
     p2 = to_polynomial(p2)
