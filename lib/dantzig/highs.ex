@@ -58,7 +58,7 @@ defmodule Dantzig.HiGHS do
 
   defp build_options_file_content(opts) do
     # Options that must be passed via options file (not CLI args)
-    file_options = [:mip_rel_gap, :log_to_console]
+    file_options = [:mip_rel_gap, :log_to_console, :mip_max_stall_nodes]
 
     (
       for key <- file_options,
