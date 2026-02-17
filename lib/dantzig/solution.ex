@@ -2,11 +2,25 @@ defmodule Dantzig.Solution do
   alias Dantzig.Solution.Parser
   alias Dantzig.Polynomial
 
+  @type status :: :optimal | :time_limit | :iteration_limit
+
+  @type t :: %__MODULE__{
+          model_status: String.t() | nil,
+          feasibility: boolean(),
+          objective: number() | nil,
+          variables: %{String.t() => number()},
+          constraints: %{String.t() => number()},
+          status: status(),
+          mip_gap: float() | nil
+        }
+
   defstruct model_status: nil,
             feasibility: true,
             objective: nil,
             variables: %{},
-            constraints: %{}
+            constraints: %{},
+            status: :optimal,
+            mip_gap: nil
 
   def evaluate(%__MODULE__{} = _solution, number) when is_number(number), do: number
 
