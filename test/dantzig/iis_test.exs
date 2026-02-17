@@ -139,10 +139,9 @@ defmodule Dantzig.IISTest do
     test "returns nil for empty file" do
       path = Path.join(System.tmp_dir!(), "empty_iis_#{System.unique_integer()}.lp")
       File.write!(path, "")
+      on_exit(fn -> File.rm(path) end)
 
       assert IIS.from_file(path) == nil
-    after
-      # cleanup handled by test isolation
     end
 
     test "parses a valid IIS file from disk" do
@@ -159,13 +158,13 @@ defmodule Dantzig.IISTest do
       end
       """)
 
+      on_exit(fn -> File.rm(path) end)
+
       iis = IIS.from_file(path)
 
       assert %IIS{} = iis
       assert "c0" in iis.constraints
       assert "x0" in iis.variables
-    after
-      # cleanup
     end
   end
 
