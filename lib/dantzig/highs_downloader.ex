@@ -14,26 +14,17 @@ defmodule Dantzig.HiGHSDownloader do
     # a new binary path. If users decide to use a different binary,
     # they're on their own.
     if default_binary_path == binary_path do
-      # The user hasn't specified a custom path;
-      # We'll download the binary if appropriate.
       case {File.exists?(binary_path), downloaded_version == highs_version} do
         {true, true} ->
-          # The binary exists and the version matches the one given by the user;
-          # Do nothing
           :ok
 
         {false, true} ->
-          # For some reason, we have a version file but not a binary.
-          # Download the binary again
           download_for_target(highs_version, target())
 
         {_, false} ->
-          # The current version doesn't match the one given by the user.
-          # Download the binary again and write a new version number
           download_for_target(highs_version, target())
       end
     else
-      # Do nothing
       :ok
     end
   end
@@ -58,61 +49,43 @@ defmodule Dantzig.HiGHSDownloader do
 
     case unpacked do
       :ok -> :ok
-      {:error, :eof} ->
-        # Even if `:erl_tar.extract/2` return this error,
-        # it seems like it unpacks the file correctly
-        :ok
+      {:error, :eof} -> :ok
       other -> raise "couldn't unpack archive: #{inspect(other)}"
     end
 
     bin_path = Path.join([tmp_dir, "bin", "highs"])
     dst_path = Config.get_highs_binary_path()
 
-    # Create the destination directory if
-    # it does not exist
     dst_dir = Path.dirname(dst_path)
     File.mkdir_p!(dst_dir)
 
-    # Write the artifact and version number
-    # (overwriting previously written files if needed)
     Config.persist_downloaded_version(version)
     File.cp!(bin_path, dst_path)
-
-    # Make the binary executable
     File.chmod!(dst_path, 0o755)
 
     :ok
   end
 
-  # Available targets: https://github.com/evanw/esbuild/tree/main/npm/@esbuild
   def target() do
-    # Get erlang's interpretation of what the system architecture is
     arch_str = :erlang.system_info(:system_architecture)
-    # Split the architecture string into its component parts
     parts = arch_str |> List.to_string() |> String.split("-")
     [arch | rest] = parts
     [os, suffix] = Enum.take(rest, -2)
 
     case {arch, os, suffix} do
-      {"aarch64", "apple", "darwin" <> _} -> "aarch64-apple-darwin"
-      {"aarch64", "linux", "gnu"} -> "aarch64-linux-gnu-cxx11"
-      {"aarch64", "linux", "musl"} -> "aarch64-linux-musl-cxx11"
-      {"aarch64", "unknown", "freebsd"} -> "aarch64-unknown-freebsd"
-      {"i686", "linux", "gnu"} -> "i686-linux-gnu-cxx11"
-      {"i686", "linux", "musl"} -> "i686-linux-gnu-cxx11"
-      {"x86_64", "apple", "darwin"} -> "x86_64-apple-darwin"
-      {"x86_64", "linux", "gnu"} -> "x86_64-linux-gnu-cxx11"
-      {"x86_64", "linux", "musl"} -> "x86_64-linux-musl-cxx11"
-      {"x86_64", "unknown", "freebsd"} -> "x86_64-unknown-freebsd"
-      {"x86_64", "w64", "mingw32"} -> "x86_64-w64-mingw32"
+      {"aarch64", "apple", "darwin" <> _} -> "arm-apple"
+      {"x86_64", "linux", "gnu"} -> "x86_64-linux-gnu"
+      {"aarch64", "linux", "gnu"} -> "aarch64-linux-gnu"
+      {"x86_64", "w64", "mingw32"} -> "x86_64-windows"
+      {"aarch64", "w64", "mingw32"} -> "aarch64-windows"
     end
   end
 
-  defp tar_gz_url(highs_version, target) do
-    "https://github.com/JuliaBinaryWrappers/" <>
-    "HiGHSstatic_jll.jl/releases/download/" <>
-    "HiGHSstatic-v#{highs_version}%2B0/" <>
-    "HiGHSstatic.v#{highs_version}.#{target}.tar.gz"
+  defp tar_gz_url(version, target) do
+    ext = if String.contains?(target, "windows"), do: "zip", else: "tar.gz"
+
+    "https://github.com/ERGO-Code/HiGHS/releases/download/" <>
+      "v#{version}/highs-#{version}-#{target}-static-mit.#{ext}"
   end
 
   defp fetch_file!(url, retry \\ true) do
@@ -151,7 +124,6 @@ defmodule Dantzig.HiGHSDownloader do
       [
         ssl: [
           verify: :verify_peer,
-          # https://erlef.github.io/security-wg/secure_coding_and_deployment_hardening/inets
           cacerts: :public_key.cacerts_get(),
           depth: 2,
           customize_hostname_check: [

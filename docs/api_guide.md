@@ -16,6 +16,7 @@ quadratic programming (QP) optimization problems using the HiGHS solver.
 - [Adding Constraints](#adding-constraints)
 - [Solving the Problem](#solving-the-problem)
 - [Working with Solutions](#working-with-solutions)
+- [Error Handling](#error-handling)
 - [Performance Best Practices](#performance-best-practices)
 - [Complete Examples](#complete-examples)
 
@@ -25,7 +26,7 @@ quadratic programming (QP) optimization problems using the HiGHS solver.
 
 ```elixir
 require Dantzig.Polynomial, as: Polynomial
-alias Dantzig.{Problem, Constraint, HiGHS}
+alias Dantzig.{Problem, Constraint}
 
 # Create a maximization problem
 problem = Problem.new(direction: :maximize)
@@ -44,7 +45,7 @@ problem = Problem.add_constraint(problem, Constraint.new(x <= 6))
 problem = Problem.add_constraint(problem, Constraint.new(y <= 8))
 
 # Solve
-{:ok, solution} = HiGHS.solve(problem)
+{:optimal, solution} = Dantzig.solve(problem)
 
 # Access results
 IO.puts("Optimal value: #{solution.objective}")
@@ -343,29 +344,79 @@ problem =
 ### Basic Solving
 
 ```elixir
-alias Dantzig.HiGHS
-
-case HiGHS.solve(problem) do
-  {:ok, solution} ->
+case Dantzig.solve(problem) do
+  {:optimal, solution} ->
     IO.puts("Optimal objective: #{solution.objective}")
 
-  :error ->
-    IO.puts("Problem is infeasible or unbounded")
+  {:infeasible, info} ->
+    IO.puts("Problem is infeasible")
+
+  {:unbounded, info} ->
+    IO.puts("Problem is unbounded")
+
+  {:error, details} ->
+    IO.puts("Solver error: #{details[:reason]}")
 end
 ```
+
+### Return Values
+
+| Status | Return Value | Description |
+|--------|-------------|-------------|
+| `:optimal` | `{:optimal, %Solution{}}` | Proven optimal solution |
+| `:time_limit` | `{:time_limit, %Solution{}}` | Time limit reached, best feasible solution returned |
+| `:iteration_limit` | `{:iteration_limit, %Solution{}}` | Iteration limit reached, best feasible solution returned |
+| `:infeasible` | `{:infeasible, %{iis: IIS.t() \| nil, output: String.t()}}` | Problem is infeasible |
+| `:unbounded` | `{:unbounded, %{output: String.t()}}` | Problem is unbounded |
+| `:error` | `{:error, %{reason: atom(), ...}}` | Solver error |
 
 ### Solver Options
 
 ```elixir
 # With time limit (seconds)
-{:ok, solution} = HiGHS.solve(problem, time_limit: 60)
+{:optimal, solution} = Dantzig.solve(problem, time_limit: 60)
 
 # With MIP gap tolerance
-{:ok, solution} = HiGHS.solve(problem, mip_rel_gap: 0.01)
+{:optimal, solution} = Dantzig.solve(problem, mip_rel_gap: 0.01)
+
+# Maximum stall nodes for MIP
+{:optimal, solution} = Dantzig.solve(problem, mip_max_stall_nodes: 100)
 
 # Suppress solver output
-{:ok, solution} = HiGHS.solve(problem, log_to_console: false)
+{:optimal, solution} = Dantzig.solve(problem, log_to_console: false)
+
+# Extract IIS on infeasibility (see Error Handling section)
+result = Dantzig.solve(problem, compute_iis: true)
 ```
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `:time_limit` | `number` | none | Maximum solve time in seconds |
+| `:mip_rel_gap` | `float` | none | Relative MIP gap tolerance |
+| `:mip_max_stall_nodes` | `integer` | none | Max nodes without improvement before stalling |
+| `:log_to_console` | `boolean` | `false` | Enable solver logging to console |
+| `:compute_iis` | `boolean` | `false` | Extract IIS when problem is infeasible |
+
+### Using `solve!/2`
+
+For a simpler API when you expect success, use `solve!/2`. It returns the solution directly and raises on failure:
+
+```elixir
+# Returns Solution directly - raises on infeasibility/unboundedness/error
+solution = Dantzig.solve!(problem)
+IO.puts("Objective: #{solution.objective}")
+
+# Also works with options
+solution = Dantzig.solve!(problem, time_limit: 60)
+```
+
+Exceptions raised by `solve!/2`:
+
+| Exception | When |
+|-----------|------|
+| `Dantzig.InfeasibleError` | Problem is infeasible (includes IIS data if available) |
+| `Dantzig.UnboundedError` | Problem is unbounded |
+| `Dantzig.SolverError` | Solver error (includes reason and details) |
 
 ---
 
@@ -374,7 +425,7 @@ end
 ### Accessing Variable Values
 
 ```elixir
-{:ok, solution} = HiGHS.solve(problem)
+{:optimal, solution} = Dantzig.solve(problem)
 
 # Direct access (need to know mangled name)
 x_value = solution.variables["x00000000_x"]
@@ -397,10 +448,92 @@ slack = Dantzig.Solution.evaluate(solution, capacity - used_capacity)
 
 ```elixir
 solution.objective      # Optimal objective value
-solution.model_status   # "Optimal", "Infeasible", etc.
+solution.model_status   # "Optimal", "Time limit reached", etc.
+solution.status         # :optimal, :time_limit, or :iteration_limit
 solution.feasibility    # true/false
 solution.variables      # Map of variable name => value
 solution.constraints    # Map of constraint name => info
+solution.mip_gap        # Relative MIP gap at termination (nil if not MIP or optimal)
+```
+
+### Handling Time/Iteration Limits
+
+When a solve hits a time or iteration limit but has a feasible solution, the result
+is returned with the corresponding status atom. The solution is still usable:
+
+```elixir
+case Dantzig.solve(problem, time_limit: 30) do
+  {:optimal, solution} ->
+    IO.puts("Proven optimal: #{solution.objective}")
+
+  {:time_limit, solution} ->
+    IO.puts("Best found: #{solution.objective} (gap: #{solution.mip_gap})")
+
+  {:iteration_limit, solution} ->
+    IO.puts("Best found: #{solution.objective} (gap: #{solution.mip_gap})")
+
+  {:infeasible, _} ->
+    IO.puts("Infeasible")
+end
+```
+
+---
+
+## Error Handling
+
+### Infeasibility and IIS
+
+When a problem is infeasible, you can extract the **Irreducible Infeasible Set (IIS)** —
+the minimal set of constraints and variable bounds that together cause infeasibility.
+This helps diagnose *why* a model is infeasible.
+
+```elixir
+case Dantzig.solve(problem, compute_iis: true) do
+  {:infeasible, %{iis: iis}} when not is_nil(iis) ->
+    IO.puts("Infeasible! Conflicting constraints:")
+    for name <- iis.constraints, do: IO.puts("  - #{name}")
+
+    IO.puts("Variables involved:")
+    for var <- iis.variables, do: IO.puts("  - #{var}")
+
+  {:infeasible, %{iis: nil}} ->
+    IO.puts("Infeasible, but IIS could not be extracted")
+
+  {:optimal, solution} ->
+    IO.puts("Solved: #{solution.objective}")
+end
+```
+
+The IIS struct (`Dantzig.IIS`) contains:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `constraints` | `[String.t()]` | Names of conflicting constraints |
+| `variables` | `[String.t()]` | Variables involved in conflicting bounds |
+| `raw_content` | `String.t()` | Raw LP-format IIS model from HiGHS |
+
+IIS computation is **opt-in** via `compute_iis: true` because it adds overhead.
+When not requested, `iis` will be `nil` in the infeasible result.
+
+### Using `solve!/2` with Exceptions
+
+`solve!/2` raises typed exceptions for programmatic error handling:
+
+```elixir
+try do
+  solution = Dantzig.solve!(problem, compute_iis: true)
+  IO.puts("Objective: #{solution.objective}")
+rescue
+  e in Dantzig.InfeasibleError ->
+    # e.iis contains the IIS struct (or nil)
+    IO.puts("Infeasible: #{Exception.message(e)}")
+
+  e in Dantzig.UnboundedError ->
+    IO.puts("Unbounded: #{Exception.message(e)}")
+
+  e in Dantzig.SolverError ->
+    IO.puts("Solver error: #{e.reason}")
+end
 ```
 
 ---
@@ -471,7 +604,7 @@ total = Polynomial.sum_linear(polynomials)
 defmodule ProductionPlanning do
   require Dantzig.Polynomial, as: Polynomial
   require Dantzig.Constraint
-  alias Dantzig.{Problem, Constraint, HiGHS}
+  alias Dantzig.{Problem, Constraint}
 
   def solve do
     products = [:widgets, :gadgets, :gizmos]
@@ -518,7 +651,7 @@ defmodule ProductionPlanning do
       end)
 
     # Solve
-    {:ok, solution} = HiGHS.solve(problem)
+    {:optimal, solution} = Dantzig.solve(problem)
 
     # Report results
     IO.puts("Optimal profit: $#{solution.objective}")
@@ -536,7 +669,7 @@ end
 defmodule Transportation do
   require Dantzig.Polynomial, as: Polynomial
   require Dantzig.Constraint
-  alias Dantzig.{Problem, Constraint, HiGHS}
+  alias Dantzig.{Problem, Constraint}
 
   def solve do
     warehouses = [:seattle, :denver]
@@ -587,7 +720,7 @@ defmodule Transportation do
         Problem.add_constraint(p, Constraint.new(lhs, :>=, demand[cust]))
       end)
 
-    {:ok, solution} = HiGHS.solve(problem)
+    {:optimal, solution} = Dantzig.solve(problem)
 
     IO.puts("Minimum shipping cost: $#{solution.objective}")
     for wh <- warehouses, cust <- customers do
@@ -603,6 +736,14 @@ end
 ---
 
 ## API Reference
+
+### `Dantzig`
+
+| Function | Description |
+|----------|-------------|
+| `solve(problem, opts)` | Solve problem, returns `{status, result}` tuple |
+| `solve!(problem, opts)` | Solve problem, returns solution or raises |
+| `dump_problem_to_file(problem, path)` | Write problem in LP format to disk |
 
 ### `Dantzig.Polynomial`
 
@@ -639,16 +780,35 @@ end
 | `new(lhs, op, rhs)` | Create from components |
 | `new_linear(...)` | Create with linearity check |
 
-### `Dantzig.HiGHS`
-
-| Function | Description |
-|----------|-------------|
-| `solve(problem, opts)` | Solve optimization problem |
-
 ### `Dantzig.Solution`
 
-| Function | Description |
+| Field/Function | Description |
 |----------|-------------|
+| `.objective` | Optimal objective value |
+| `.model_status` | HiGHS status string ("Optimal", etc.) |
+| `.status` | Status atom: `:optimal`, `:time_limit`, `:iteration_limit` |
+| `.mip_gap` | Relative MIP gap at termination (`nil` if N/A) |
+| `.feasibility` | `true`/`false` |
+| `.variables` | Map of variable name to value |
+| `.constraints` | Map of constraint name to info |
 | `evaluate(sol, poly)` | Evaluate polynomial with solution |
 | `nr_of_variables(sol)` | Count variables |
 | `nr_of_constraints(sol)` | Count constraints |
+
+### `Dantzig.IIS`
+
+| Field/Function | Description |
+|----------|-------------|
+| `.constraints` | List of conflicting constraint names |
+| `.variables` | List of variables involved in conflicting bounds |
+| `.raw_content` | Raw LP-format IIS model content |
+| `parse(contents)` | Parse LP-format IIS string into struct |
+| `from_file(path)` | Read and parse IIS file from disk (returns `nil` if missing/empty) |
+
+### Exceptions
+
+| Exception | Fields | Description |
+|-----------|--------|-------------|
+| `Dantzig.InfeasibleError` | `iis` | Problem is infeasible; `iis` contains `%IIS{}` or `nil` |
+| `Dantzig.UnboundedError` | — | Problem is unbounded |
+| `Dantzig.SolverError` | `reason`, `details` | Solver error with diagnostic info |
