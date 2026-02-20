@@ -110,7 +110,9 @@ defmodule Dantzig.PolynomialTest do
     end
 
     test "handles constants" do
-      result = Polynomial.sum_linear([Polynomial.const(1), Polynomial.const(2), Polynomial.const(3)])
+      result =
+        Polynomial.sum_linear([Polynomial.const(1), Polynomial.const(2), Polynomial.const(3)])
+
       assert Polynomial.equal?(result, Polynomial.const(6))
     end
 
@@ -148,11 +150,12 @@ defmodule Dantzig.PolynomialTest do
       y = Polynomial.variable(:y)
       vars = %{1 => x, 2 => y}
 
-      result = Polynomial.collect do
-        for i <- [1, 2], var = vars[i] do
-          2 * var
+      result =
+        Polynomial.collect do
+          for i <- [1, 2], var = vars[i] do
+            2 * var
+          end
         end
-      end
 
       expected = Polynomial.algebra(2 * x + 2 * y)
       assert Polynomial.equal?(result, expected)
@@ -163,11 +166,12 @@ defmodule Dantzig.PolynomialTest do
       vars = %{1 => x, 2 => x}
       coefficient = 5
 
-      result = Polynomial.collect do
-        for i <- [1, 2], var = vars[i] do
-          -coefficient * var
+      result =
+        Polynomial.collect do
+          for i <- [1, 2], var = vars[i] do
+            -coefficient * var
+          end
         end
-      end
 
       expected = Polynomial.algebra(-10 * x)
       assert Polynomial.equal?(result, expected)
@@ -177,11 +181,12 @@ defmodule Dantzig.PolynomialTest do
       x = Polynomial.variable(:x)
       vars = %{1 => x, 2 => nil, 3 => x}
 
-      result = Polynomial.collect do
-        for i <- [1, 2, 3], var = vars[i], var != nil do
-          var
+      result =
+        Polynomial.collect do
+          for i <- [1, 2, 3], var = vars[i], var != nil do
+            var
+          end
         end
-      end
 
       expected = Polynomial.algebra(2 * x)
       assert Polynomial.equal?(result, expected)
@@ -192,11 +197,12 @@ defmodule Dantzig.PolynomialTest do
       y = Polynomial.variable(:y)
       vars = %{1 => x, 2 => y}
 
-      result = Polynomial.collect do
-        for i <- [1, 2], var = vars[i] do
-          var - 1
+      result =
+        Polynomial.collect do
+          for i <- [1, 2], var = vars[i] do
+            var - 1
+          end
         end
-      end
 
       expected = Polynomial.algebra(x + y - 2)
       assert Polynomial.equal?(result, expected)
@@ -206,20 +212,23 @@ defmodule Dantzig.PolynomialTest do
       x = Polynomial.variable(:x)
       vars = %{1 => x, 2 => x}
 
-      result = Polynomial.collect do
-        for i <- [1, 2], var = vars[i] do
-          var / 2
+      result =
+        Polynomial.collect do
+          for i <- [1, 2], var = vars[i] do
+            var / 2
+          end
         end
-      end
 
-      expected = Polynomial.algebra(x)  # 0.5x + 0.5x = 1x
+      # 0.5x + 0.5x = 1x
+      expected = Polynomial.algebra(x)
       assert Polynomial.equal?(result, expected)
     end
 
     test "empty comprehension returns zero" do
-      result = Polynomial.collect do
-        for _i <- [], do: Polynomial.variable(:x)
-      end
+      result =
+        Polynomial.collect do
+          for _i <- [], do: Polynomial.variable(:x)
+        end
 
       assert Polynomial.equal?(result, Polynomial.const(0))
     end

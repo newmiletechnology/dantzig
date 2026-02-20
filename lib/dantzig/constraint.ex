@@ -123,8 +123,8 @@ defmodule Dantzig.Constraint do
 
       other ->
         raise ArgumentError, """
-          Invalid expression in constraint: #{Macro.to_string(other)}.
-          """
+        Invalid expression in constraint: #{Macro.to_string(other)}.
+        """
     end
   end
 
@@ -145,11 +145,11 @@ defmodule Dantzig.Constraint do
   def solve_for_variable(%__MODULE__{} = constraint, variable) do
     unless depends_on?(constraint, variable) do
       raise ArgumentError, """
-        The constraint doesn't depend on the variable #{inspect(variable)}
-        Constraint:
+      The constraint doesn't depend on the variable #{inspect(variable)}
+      Constraint:
 
-        #{inspect(constraint)}
-        """
+      #{inspect(constraint)}
+      """
     end
 
     # Ensure we are using a canonical representation

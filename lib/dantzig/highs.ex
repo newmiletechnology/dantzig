@@ -13,17 +13,32 @@ defmodule Dantzig.HiGHS do
   @max_random_prefix 2 ** 32
 
   @model_statuses %{
+    # Success statuses — have a feasible solution to parse
     "Optimal" => :optimal,
+    "Bound on objective reached" => :objective_bound,
+    "Target for objective reached" => :objective_target,
+
+    # Early termination — have a feasible solution if one was found
+    "Time limit reached" => :time_limit,
+    "Iteration limit reached" => :iteration_limit,
+    "Solution limit reached" => :solution_limit,
+
+    # Infeasible/unbounded — no solution
     "Infeasible" => :infeasible,
     "Unbounded" => :unbounded,
-    "Time limit reached" => :time_limit,
-    "Iteration limit reached" => :iteration_limit
+    "Primal infeasible or unbounded" => :infeasible
   }
 
   # --- Public API ---
 
   @spec solve(Dantzig.Problem.t()) ::
-          {:error | :infeasible | :iteration_limit | :optimal | :time_limit | :unbounded, map()}
+          {:optimal
+           | :time_limit
+           | :iteration_limit
+           | :objective_bound
+           | :objective_target
+           | :solution_limit, map()}
+          | {:infeasible | :unbounded | :error, map()}
   def solve(%Problem{} = problem, opts \\ []) do
     iodata = to_lp_iodata(problem)
 
@@ -102,7 +117,14 @@ defmodule Dantzig.HiGHS do
   end
 
   defp build_response(status, contents, output, _iis_path)
-       when status in [:optimal, :time_limit, :iteration_limit] do
+       when status in [
+              :optimal,
+              :time_limit,
+              :iteration_limit,
+              :objective_bound,
+              :objective_target,
+              :solution_limit
+            ] do
     case Solution.from_file_contents(contents) do
       {:ok, solution} ->
         {status, %{solution | status: status, mip_gap: extract_mip_gap(output)}}

@@ -16,6 +16,9 @@ defmodule Dantzig do
   - `{:optimal, solution}` - Proven optimal solution found
   - `{:time_limit, solution}` - Time limit reached, best feasible solution returned
   - `{:iteration_limit, solution}` - Iteration limit reached, best feasible solution returned
+  - `{:objective_bound, solution}` - Objective bound reached, feasible solution returned
+  - `{:objective_target, solution}` - Objective target reached, feasible solution returned
+  - `{:solution_limit, solution}` - Solution limit reached, feasible solution returned
   - `{:infeasible, info}` - Problem is infeasible; `info.iis` contains IIS if `compute_iis: true`
   - `{:unbounded, info}` - Problem is unbounded
   - `{:error, info}` - Solver error with details in `info.reason`
@@ -34,6 +37,9 @@ defmodule Dantzig do
           {:optimal, Solution.t()}
           | {:time_limit, Solution.t()}
           | {:iteration_limit, Solution.t()}
+          | {:objective_bound, Solution.t()}
+          | {:objective_target, Solution.t()}
+          | {:solution_limit, Solution.t()}
           | {:infeasible, %{iis: IIS.t() | nil, output: String.t()}}
           | {:unbounded, %{output: String.t()}}
           | {:error, map()}
@@ -52,7 +58,15 @@ defmodule Dantzig do
   @spec solve!(Problem.t(), keyword()) :: Solution.t()
   def solve!(%Problem{} = problem, opts \\ []) do
     case solve(problem, opts) do
-      {status, %Solution{} = solution} when status in [:optimal, :time_limit, :iteration_limit] ->
+      {status, %Solution{} = solution}
+      when status in [
+             :optimal,
+             :time_limit,
+             :iteration_limit,
+             :objective_bound,
+             :objective_target,
+             :solution_limit
+           ] ->
         solution
 
       {:infeasible, %{iis: iis}} ->

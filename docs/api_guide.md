@@ -366,6 +366,9 @@ end
 | `:optimal` | `{:optimal, %Solution{}}` | Proven optimal solution |
 | `:time_limit` | `{:time_limit, %Solution{}}` | Time limit reached, best feasible solution returned |
 | `:iteration_limit` | `{:iteration_limit, %Solution{}}` | Iteration limit reached, best feasible solution returned |
+| `:objective_bound` | `{:objective_bound, %Solution{}}` | Objective bound reached, feasible solution returned |
+| `:objective_target` | `{:objective_target, %Solution{}}` | Objective target reached, feasible solution returned |
+| `:solution_limit` | `{:solution_limit, %Solution{}}` | Solution limit reached, feasible solution returned |
 | `:infeasible` | `{:infeasible, %{iis: IIS.t() \| nil, output: String.t()}}` | Problem is infeasible |
 | `:unbounded` | `{:unbounded, %{output: String.t()}}` | Problem is unbounded |
 | `:error` | `{:error, %{reason: atom(), ...}}` | Solver error |
@@ -786,7 +789,7 @@ end
 |----------|-------------|
 | `.objective` | Optimal objective value |
 | `.model_status` | HiGHS status string ("Optimal", etc.) |
-| `.status` | Status atom: `:optimal`, `:time_limit`, `:iteration_limit` |
+| `.status` | Status atom: `:optimal`, `:time_limit`, `:iteration_limit`, `:objective_bound`, `:objective_target`, `:solution_limit` |
 | `.mip_gap` | Relative MIP gap at termination (`nil` if N/A) |
 | `.feasibility` | `true`/`false` |
 | `.variables` | Map of variable name to value |
