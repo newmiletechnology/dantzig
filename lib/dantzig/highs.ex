@@ -29,6 +29,12 @@ defmodule Dantzig.HiGHS do
     "Primal infeasible or unbounded" => :infeasible
   }
 
+  @output_status_patterns [
+    {~r/^\s*Status\s+Infeasible$/m, :infeasible},
+    {~r/^\s*Status\s+Primal infeasible or unbounded$/m, :infeasible},
+    {~r/^\s*Status\s+Unbounded$/m, :unbounded}
+  ]
+
   # --- Public API ---
 
   @spec solve(Dantzig.Problem.t()) ::
@@ -134,8 +140,23 @@ defmodule Dantzig.HiGHS do
     end
   end
 
-  defp build_response(nil, contents, output, _iis_path) do
-    {:error, %{reason: :unknown_status, raw: contents, output: output}}
+  defp build_response(nil, contents, output, iis_path) do
+    case extract_status_from_output(output) do
+      :infeasible ->
+        {:infeasible, %{iis: IIS.from_file(iis_path), output: output}}
+
+      :unbounded ->
+        {:unbounded, %{output: output}}
+
+      nil ->
+        {:error, %{reason: :unknown_status, raw: contents, output: output}}
+    end
+  end
+
+  defp extract_status_from_output(output) do
+    Enum.find_value(@output_status_patterns, fn {pattern, status} ->
+      if Regex.match?(pattern, output), do: status
+    end)
   end
 
   # --- Solver Execution ---
