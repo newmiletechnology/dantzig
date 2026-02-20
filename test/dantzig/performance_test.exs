@@ -29,23 +29,25 @@ defmodule Dantzig.PerformanceTest do
       # Measure time for collect
       start_time = System.monotonic_time(:millisecond)
 
-      _result = Polynomial.collect do
-        for i <- 1..n do
-          coefficients[i] * vars[i]
+      _result =
+        Polynomial.collect do
+          for i <- 1..n do
+            coefficients[i] * vars[i]
+          end
         end
-      end
 
       elapsed_ms = System.monotonic_time(:millisecond) - start_time
 
       # Should complete in under 1 second (was 5+ minutes with old sum/1)
       assert elapsed_ms < 1000,
-        "Expected 42,000 terms to construct in < 1s, took #{elapsed_ms}ms"
+             "Expected 42,000 terms to construct in < 1s, took #{elapsed_ms}ms"
     end
 
     test "sum_linear is significantly faster than iterative for large inputs" do
       problem = Problem.new(direction: :maximize)
 
-      n = 1000  # Smaller for comparison test
+      # Smaller for comparison test
+      n = 1000
 
       {_problem, vars} =
         Enum.reduce(1..n, {problem, %{}}, fn i, {p, v} ->
@@ -56,9 +58,10 @@ defmodule Dantzig.PerformanceTest do
       coefficients = for i <- 1..n, into: %{}, do: {i, i * 1.0}
 
       # Prepare polynomial list
-      polynomials = for i <- 1..n do
-        Polynomial.algebra(coefficients[i] * vars[i])
-      end
+      polynomials =
+        for i <- 1..n do
+          Polynomial.algebra(coefficients[i] * vars[i])
+        end
 
       # Measure sum_linear
       start_linear = System.monotonic_time(:microsecond)
@@ -72,9 +75,10 @@ defmodule Dantzig.PerformanceTest do
 
       # sum_linear should be at least 5x faster for 1000 terms
       speedup = time_iterative / max(time_linear, 1)
+
       assert speedup > 5,
-        "Expected sum_linear to be >5x faster, got #{Float.round(speedup, 1)}x " <>
-        "(linear: #{time_linear}us, iterative: #{time_iterative}us)"
+             "Expected sum_linear to be >5x faster, got #{Float.round(speedup, 1)}x " <>
+               "(linear: #{time_linear}us, iterative: #{time_iterative}us)"
     end
   end
 end

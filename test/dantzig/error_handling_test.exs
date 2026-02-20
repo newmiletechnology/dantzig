@@ -64,6 +64,24 @@ defmodule Dantzig.ErrorHandlingTest do
     end
   end
 
+  describe "infeasible with unbounded variable" do
+    test "handles infeasible problem with free variables as {:infeasible, _}" do
+      Polynomial.algebra do
+        problem = Problem.new(direction: :maximize)
+        {problem, x} = Problem.new_variable(problem, "x")
+
+        problem =
+          problem
+          |> Problem.add_constraint(Constraint.new(x >= 10))
+          |> Problem.add_constraint(Constraint.new(x <= 5))
+          |> Problem.increment_objective(x)
+      end
+
+      assert {:infeasible, info} = Dantzig.solve(problem)
+      assert is_map(info)
+    end
+  end
+
   describe "unbounded problems" do
     test "returns {:unbounded, info}" do
       Polynomial.algebra do

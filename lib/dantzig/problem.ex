@@ -16,7 +16,9 @@ defmodule Dantzig.Problem do
             constraints: %{},
             contraints_metadata: %{}
 
-  @spec solve_for_all_variables(t()) :: %{ProblemVariable.variable_namme() => SolvedConstraint.t()}
+  @spec solve_for_all_variables(t()) :: %{
+          ProblemVariable.variable_namme() => SolvedConstraint.t()
+        }
   def solve_for_all_variables(%__MODULE__{} = problem) do
     # There are two ways of solving for all variables:
     #
@@ -31,6 +33,7 @@ defmodule Dantzig.Problem do
       Enum.reduce(variable_names, solved_constraints, fn variable_name, solved_constraints ->
         # Put the new solved constraint in the constraint map
         solved_constraint = Constraint.solve_for_variable(constraint, variable_name)
+
         Map.update(solved_constraints, variable_name, [solved_constraint], fn constraints ->
           [solved_constraint | constraints]
         end)
