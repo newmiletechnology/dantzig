@@ -82,6 +82,114 @@ defmodule Dantzig.ErrorHandlingTest do
     end
   end
 
+  describe "infeasible MIP problems" do
+    test "returns {:infeasible, _} for MIP with conflicting integer constraints" do
+      Polynomial.algebra do
+        problem = Problem.new(direction: :maximize)
+        {problem, x} = Problem.new_variable(problem, "x", type: :integer, min: 0, max: 10)
+        {problem, y} = Problem.new_variable(problem, "y", type: :integer, min: 0, max: 10)
+
+        problem =
+          problem
+          |> Problem.add_constraint(Constraint.new(x + y >= 25))
+          |> Problem.add_constraint(Constraint.new(x <= 10))
+          |> Problem.add_constraint(Constraint.new(y <= 10))
+          |> Problem.increment_objective(x + y)
+      end
+
+      assert {:infeasible, info} = Dantzig.solve(problem, compute_iis: true)
+      assert is_map(info)
+      assert Map.has_key?(info, :output)
+    end
+
+    test "returns {:infeasible, _} for MIP with binary variables" do
+      Polynomial.algebra do
+        problem = Problem.new(direction: :maximize)
+        {problem, x} = Problem.new_variable(problem, "x", type: :binary)
+        {problem, y} = Problem.new_variable(problem, "y", type: :binary)
+
+        problem =
+          problem
+          |> Problem.add_constraint(Constraint.new(x + y >= 3))
+          |> Problem.increment_objective(x + y)
+      end
+
+      assert {:infeasible, info} = Dantzig.solve(problem, compute_iis: true)
+      assert is_map(info)
+    end
+
+    test "MIP infeasibility with compute_iis returns IIS data when available" do
+      Polynomial.algebra do
+        problem = Problem.new(direction: :maximize)
+        {problem, x} = Problem.new_variable(problem, "x", type: :integer, min: 0, max: 10)
+        {problem, y} = Problem.new_variable(problem, "y", type: :integer, min: 0, max: 10)
+
+        problem =
+          problem
+          |> Problem.add_constraint(Constraint.new(x + y >= 25))
+          |> Problem.add_constraint(Constraint.new(x <= 10))
+          |> Problem.add_constraint(Constraint.new(y <= 10))
+          |> Problem.increment_objective(x + y)
+      end
+
+      assert {:infeasible, info} = Dantzig.solve(problem, compute_iis: true)
+      assert is_list(info.iis.constraints)
+      assert is_binary(info.iis.raw_content)
+    end
+
+    test "MIP infeasibility without compute_iis still returns {:infeasible, _}" do
+      Polynomial.algebra do
+        problem = Problem.new(direction: :maximize)
+        {problem, x} = Problem.new_variable(problem, "x", type: :integer, min: 0, max: 10)
+        {problem, y} = Problem.new_variable(problem, "y", type: :integer, min: 0, max: 10)
+
+        problem =
+          problem
+          |> Problem.add_constraint(Constraint.new(x + y >= 25))
+          |> Problem.add_constraint(Constraint.new(x <= 10))
+          |> Problem.add_constraint(Constraint.new(y <= 10))
+          |> Problem.increment_objective(x + y)
+      end
+
+      assert {:infeasible, _info} = Dantzig.solve(problem)
+    end
+
+    test "solve! raises InfeasibleError for infeasible MIP" do
+      Polynomial.algebra do
+        problem = Problem.new(direction: :maximize)
+        {problem, x} = Problem.new_variable(problem, "x", type: :integer, min: 0, max: 10)
+        {problem, y} = Problem.new_variable(problem, "y", type: :integer, min: 0, max: 10)
+
+        problem =
+          problem
+          |> Problem.add_constraint(Constraint.new(x + y >= 25))
+          |> Problem.add_constraint(Constraint.new(x <= 10))
+          |> Problem.add_constraint(Constraint.new(y <= 10))
+          |> Problem.increment_objective(x + y)
+      end
+
+      assert_raise Dantzig.InfeasibleError, fn ->
+        Dantzig.solve!(problem, compute_iis: true)
+      end
+    end
+
+    test "MIP with mixed integer and binary variables detects infeasibility" do
+      Polynomial.algebra do
+        problem = Problem.new(direction: :minimize)
+        {problem, x} = Problem.new_variable(problem, "x", type: :integer, min: 0, max: 5)
+        {problem, y} = Problem.new_variable(problem, "y", type: :binary)
+
+        problem =
+          problem
+          |> Problem.add_constraint(Constraint.new(x + y >= 10))
+          |> Problem.add_constraint(Constraint.new(x <= 5))
+          |> Problem.increment_objective(x + y)
+      end
+
+      assert {:infeasible, _info} = Dantzig.solve(problem, compute_iis: true)
+    end
+  end
+
   describe "unbounded problems" do
     test "returns {:unbounded, info}" do
       Polynomial.algebra do
