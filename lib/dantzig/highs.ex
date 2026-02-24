@@ -47,15 +47,31 @@ defmodule Dantzig.HiGHS do
           | {:infeasible | :unbounded | :error, map()}
   def solve(%Problem{} = problem, opts \\ []) do
     iodata = to_lp_iodata(problem)
+    compute_iis? = Keyword.get(opts, :compute_iis, false)
+    solve_opts = Keyword.delete(opts, :compute_iis)
+    timeout_ms = Keyword.get(opts, :time_limit, 120) * 1_000
 
-    with_temporary_files(temp_file_names(opts), fn paths ->
-      {model_path, solution_path, options_path, iis_path} = assign_paths(paths)
+    with_temporary_files(temp_file_names(), fn paths ->
+      {model_path, solution_path, options_path} = assign_paths(paths)
       File.write!(model_path, iodata)
 
-      args = build_args(model_path, solution_path, options_path, iis_path, opts)
+      # Spawn IIS computation in parallel if requested — it reads the same model file
+      iis_task = if compute_iis?, do: Task.async(fn -> compute_iis_pass(model_path, opts) end)
+
+      args = build_args(model_path, solution_path, options_path, solve_opts)
       {output, exit_code} = run_solver(args)
 
-      process_result(exit_code, output, solution_path, iis_path, iodata)
+      result = process_result(exit_code, output, solution_path, iodata)
+
+      case result do
+        {:infeasible, info} when compute_iis? ->
+          iis_result = Task.await(iis_task, timeout_ms)
+          {:infeasible, Map.merge(info, iis_result)}
+
+        _ ->
+          if iis_task, do: Task.shutdown(iis_task, :brutal_kill)
+          result
+      end
     end)
   end
 
@@ -90,13 +106,13 @@ defmodule Dantzig.HiGHS do
 
   # --- Result Processing ---
 
-  defp process_result(exit_code, output, solution_path, iis_path, model_iodata)
+  defp process_result(exit_code, output, solution_path, model_iodata)
        when exit_code in [0, 1] do
     case read_solution_file(solution_path) do
       {:ok, contents} ->
         contents
         |> extract_model_status()
-        |> build_response(contents, output, iis_path)
+        |> build_response(contents, output)
 
       :error ->
         {:error,
@@ -104,7 +120,7 @@ defmodule Dantzig.HiGHS do
     end
   end
 
-  defp process_result(exit_code, output, _solution_path, _iis_path, model_iodata) do
+  defp process_result(exit_code, output, _solution_path, model_iodata) do
     {:error,
      %{
        reason: :solver_error,
@@ -114,15 +130,15 @@ defmodule Dantzig.HiGHS do
      }}
   end
 
-  defp build_response(:infeasible, _contents, output, iis_path) do
-    {:infeasible, %{iis: IIS.from_file(iis_path), output: output}}
+  defp build_response(:infeasible, _contents, output) do
+    {:infeasible, %{output: output}}
   end
 
-  defp build_response(:unbounded, _contents, output, _iis_path) do
+  defp build_response(:unbounded, _contents, output) do
     {:unbounded, %{output: output}}
   end
 
-  defp build_response(status, contents, output, _iis_path)
+  defp build_response(status, contents, output)
        when status in [
               :optimal,
               :time_limit,
@@ -140,10 +156,10 @@ defmodule Dantzig.HiGHS do
     end
   end
 
-  defp build_response(nil, contents, output, iis_path) do
+  defp build_response(nil, contents, output) do
     case extract_status_from_output(output) do
       :infeasible ->
-        {:infeasible, %{iis: IIS.from_file(iis_path), output: output}}
+        {:infeasible, %{output: output}}
 
       :unbounded ->
         {:unbounded, %{output: output}}
@@ -165,14 +181,33 @@ defmodule Dantzig.HiGHS do
     System.cmd(Config.get_highs_binary_path(), args, stderr_to_stdout: true)
   end
 
-  defp temp_file_names(opts) do
-    base = ["model.lp", "solution.lp", "options.txt"]
-    if Keyword.get(opts, :compute_iis, false), do: base ++ ["iis.lp"], else: base
+  defp compute_iis_pass(model_path, opts) do
+    with_temporary_files(["iis_options.txt", "iis.lp"], fn [options_path, iis_path] ->
+      File.write!(options_path, build_iis_options_content(iis_path))
+
+      # Use the same time limit as the main solve — IIS runs in parallel so it
+      # has the full duration available, and will be killed/ignored if not needed
+      time_limit = Keyword.get(opts, :time_limit)
+
+      args =
+        [model_path, "--options_file", options_path]
+        |> maybe_add_arg("--time_limit", time_limit)
+
+      {_output, _exit_code} = run_solver(args)
+      %{iis: IIS.from_file(iis_path)}
+    end)
   end
 
-  defp assign_paths(paths) do
-    [model_path, solution_path, options_path | rest] = paths
-    {model_path, solution_path, options_path, List.first(rest)}
+  defp build_iis_options_content(iis_path) do
+    "write_iis_model_file = #{iis_path}\niis_strategy = 2\npresolve = off"
+  end
+
+  defp temp_file_names do
+    ["model.lp", "solution.lp", "options.txt"]
+  end
+
+  defp assign_paths([model_path, solution_path, options_path]) do
+    {model_path, solution_path, options_path}
   end
 
   # --- Solution Parsing ---
@@ -208,36 +243,23 @@ defmodule Dantzig.HiGHS do
 
   # --- CLI Argument Building ---
 
-  defp build_args(model_path, solution_path, options_path, iis_path, opts) do
-    options_content = build_options_content(opts, iis_path)
+  defp build_args(model_path, solution_path, options_path, opts) do
+    options_content = build_options_content(opts)
 
     [model_path, "--solution_file", solution_path]
     |> maybe_add_arg("--time_limit", Keyword.get(opts, :time_limit))
     |> maybe_add_options_file(options_content, options_path)
   end
 
-  defp build_options_content(opts, iis_path) do
+  defp build_options_content(opts) do
     file_options = [:mip_rel_gap, :log_to_console, :mip_max_stall_nodes]
 
-    base =
-      for key <- file_options,
-          value = Keyword.get(opts, key),
-          is_present?(value) do
-        "#{key} = #{value}"
-      end
-
-    iis =
-      if Keyword.get(opts, :compute_iis, false) && is_binary(iis_path) do
-        [
-          "write_iis_model_file = #{iis_path}",
-          # iis_strategy 8 = find true IIS via elastic filter
-          "iis_strategy = 8"
-        ]
-      else
-        []
-      end
-
-    Enum.join(base ++ iis, "\n")
+    for key <- file_options,
+        value = Keyword.get(opts, key),
+        is_present?(value) do
+      "#{key} = #{value}"
+    end
+    |> Enum.join("\n")
   end
 
   defp maybe_add_arg(args, key, value) when is_present?(value),

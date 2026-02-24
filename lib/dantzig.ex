@@ -25,13 +25,26 @@ defmodule Dantzig do
 
   ## Options
 
-  - `:time_limit` - Maximum solve time in seconds
-  - `:compute_iis` - Extract IIS on infeasibility (default: false)
+  - `:time_limit` - Maximum solve time in seconds (also used as the timeout for IIS computation)
+  - `:compute_iis` - Compute IIS (Irreducible Infeasible Subsystem) when the problem is
+    infeasible (default: `false`). When enabled, IIS computation runs in parallel with the
+    main solve. If the result is infeasible, `info.iis` will contain a `Dantzig.IIS` struct
+    with the conflicting constraints and variables. If the result is feasible, the IIS
+    computation is discarded. IIS uses the elastic LP strategy (HiGHS `iis_strategy = 2`).
+    Note: IIS currently only supports LP models in HiGHS; for MIP models it operates on
+    the LP relaxation.
   - `:mip_rel_gap` - Relative MIP gap tolerance
   - `:mip_max_stall_nodes` - Max nodes without improvement before stalling
   - `:log_to_console` - Enable solver logging
 
   For time/iteration limited solves, check `solution.mip_gap` for the relative gap.
+
+  ## IIS (since v1.1.0)
+
+  When `compute_iis: true` is passed, a parallel HiGHS process computes the IIS alongside the
+  main solve. This avoids a bug in HiGHS 1.13.x where proactive IIS options could corrupt the
+  solution file for feasible models that hit a time limit. The IIS result is only included in
+  the response when the problem is actually infeasible.
   """
   @spec solve(Problem.t(), keyword()) ::
           {:optimal, Solution.t()}
@@ -40,7 +53,7 @@ defmodule Dantzig do
           | {:objective_bound, Solution.t()}
           | {:objective_target, Solution.t()}
           | {:solution_limit, Solution.t()}
-          | {:infeasible, %{iis: IIS.t() | nil, output: String.t()}}
+          | {:infeasible, %{optional(:iis) => IIS.t() | nil, output: String.t()}}
           | {:unbounded, %{output: String.t()}}
           | {:error, map()}
   def solve(%Problem{} = problem, opts \\ []) do
@@ -69,8 +82,8 @@ defmodule Dantzig do
            ] ->
         solution
 
-      {:infeasible, %{iis: iis}} ->
-        raise Dantzig.InfeasibleError, iis: iis
+      {:infeasible, info} ->
+        raise Dantzig.InfeasibleError, iis: Map.get(info, :iis)
 
       {:unbounded, _} ->
         raise Dantzig.UnboundedError
