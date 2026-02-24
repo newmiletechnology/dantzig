@@ -369,7 +369,7 @@ end
 | `:objective_bound` | `{:objective_bound, %Solution{}}` | Objective bound reached, feasible solution returned |
 | `:objective_target` | `{:objective_target, %Solution{}}` | Objective target reached, feasible solution returned |
 | `:solution_limit` | `{:solution_limit, %Solution{}}` | Solution limit reached, feasible solution returned |
-| `:infeasible` | `{:infeasible, %{iis: IIS.t() \| nil, output: String.t()}}` | Problem is infeasible |
+| `:infeasible` | `{:infeasible, %{output: String.t()}}` | Problem is infeasible (includes `iis` field when `compute_iis: true`) |
 | `:unbounded` | `{:unbounded, %{output: String.t()}}` | Problem is unbounded |
 | `:error` | `{:error, %{reason: atom(), ...}}` | Solver error |
 
@@ -398,7 +398,7 @@ result = Dantzig.solve(problem, compute_iis: true)
 | `:mip_rel_gap` | `float` | none | Relative MIP gap tolerance |
 | `:mip_max_stall_nodes` | `integer` | none | Max nodes without improvement before stalling |
 | `:log_to_console` | `boolean` | `false` | Enable solver logging to console |
-| `:compute_iis` | `boolean` | `false` | Extract IIS when problem is infeasible |
+| `:compute_iis` | `boolean` | `false` | Compute IIS in parallel when problem is infeasible (since v1.1.0) |
 
 ### Using `solve!/2`
 
@@ -484,11 +484,19 @@ end
 
 ## Error Handling
 
-### Infeasibility and IIS
+### Infeasibility and IIS (since v1.1.0)
 
-When a problem is infeasible, you can extract the **Irreducible Infeasible Set (IIS)** —
+When a problem is infeasible, you can extract the **Irreducible Infeasible Subsystem (IIS)** —
 the minimal set of constraints and variable bounds that together cause infeasibility.
 This helps diagnose *why* a model is infeasible.
+
+When `compute_iis: true` is passed, IIS computation runs **in parallel** with the main solve
+using the elastic LP strategy (HiGHS `iis_strategy = 2`). If the problem turns out to be
+feasible, the IIS computation is discarded. If infeasible, the IIS result is included in
+the response as `info.iis`.
+
+> **Note:** IIS currently only supports LP models in HiGHS. For MIP models, it operates
+> on the LP relaxation.
 
 ```elixir
 case Dantzig.solve(problem, compute_iis: true) do
@@ -499,8 +507,21 @@ case Dantzig.solve(problem, compute_iis: true) do
     IO.puts("Variables involved:")
     for var <- iis.variables, do: IO.puts("  - #{var}")
 
-  {:infeasible, %{iis: nil}} ->
+  {:infeasible, _info} ->
     IO.puts("Infeasible, but IIS could not be extracted")
+
+  {:optimal, solution} ->
+    IO.puts("Solved: #{solution.objective}")
+end
+```
+
+Without `compute_iis: true`, the infeasible result will not include an `iis` field:
+
+```elixir
+case Dantzig.solve(problem) do
+  {:infeasible, info} ->
+    # info only contains :output, no :iis key
+    IO.puts("Infeasible")
 
   {:optimal, solution} ->
     IO.puts("Solved: #{solution.objective}")
@@ -515,8 +536,8 @@ The IIS struct (`Dantzig.IIS`) contains:
 | `variables` | `[String.t()]` | Variables involved in conflicting bounds |
 | `raw_content` | `String.t()` | Raw LP-format IIS model from HiGHS |
 
-IIS computation is **opt-in** via `compute_iis: true` because it adds overhead.
-When not requested, `iis` will be `nil` in the infeasible result.
+IIS computation is **opt-in** via `compute_iis: true`. When not requested, the `iis`
+field is absent from the infeasible result map.
 
 ### Using `solve!/2` with Exceptions
 

@@ -173,7 +173,7 @@ defmodule Dantzig.IISTest do
     require Dantzig.Constraint, as: Constraint
     require Dantzig.Polynomial, as: Polynomial
 
-    test "infeasible problem without compute_iis returns nil iis" do
+    test "infeasible problem without compute_iis does not include iis data" do
       Polynomial.algebra do
         problem = Problem.new(direction: :minimize)
         {problem, x} = Problem.new_variable(problem, "x")
@@ -185,7 +185,8 @@ defmodule Dantzig.IISTest do
           |> Problem.increment_objective(x)
       end
 
-      assert {:infeasible, %{iis: nil}} = Dantzig.solve(problem)
+      assert {:infeasible, info} = Dantzig.solve(problem)
+      refute Map.has_key?(info, :iis)
     end
 
     test "infeasible problem with compute_iis returns IIS with conflicting constraints" do
@@ -203,9 +204,16 @@ defmodule Dantzig.IISTest do
       assert {:infeasible, %{iis: iis}} = Dantzig.solve(problem, compute_iis: true)
       assert %IIS{} = iis
       # IIS should identify both conflicting constraints
-      assert length(iis.constraints) >= 2
+      assert length(iis.constraints) == 3
+      # IIS should identify all variables involved in the conflict
+      assert length(iis.variables) == 1
       # IIS should identify the variable involved in the conflict
-      assert length(iis.variables) >= 1
+      assert "x00000000_x" in iis.variables
+      # IIS should identify the constraints involved in the conflict
+      assert "c00000000" in iis.constraints
+      assert "c00000001" in iis.constraints
+      # IIS should identify the objective constraint
+      assert "obj" in iis.constraints
       assert is_binary(iis.raw_content)
       assert byte_size(iis.raw_content) > 0
     end
