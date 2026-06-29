@@ -181,6 +181,36 @@ defmodule Dantzig.Problem do
     {new_problem, Enum.reverse(monomials)}
   end
 
+  @doc """
+  Returns the `%ProblemVariable{}` struct for a given variable polynomial or name.
+
+  Returns `nil` if the polynomial isn't a single-variable monomial or the
+  variable isn't in the problem.
+
+  ## Examples
+
+      {problem, x} = Problem.new_variable(problem, "x")
+      Problem.lookup_variable(problem, x)
+      #=> %ProblemVariable{name: "x00000000_x", ...}
+
+      Problem.lookup_variable(problem, "x00000000_x")
+      #=> %ProblemVariable{name: "x00000000_x", ...}
+
+      Problem.lookup_variable(problem, "nope")
+      #=> nil
+  """
+  @spec lookup_variable(t(), Polynomial.t() | binary()) :: ProblemVariable.t() | nil
+  def lookup_variable(%__MODULE__{} = problem, name) when is_binary(name) do
+    Map.get(problem.variables, name)
+  end
+
+  def lookup_variable(%__MODULE__{} = problem, %Polynomial{} = poly) do
+    name = Polynomial.variable_name!(poly)
+    Map.get(problem.variables, name)
+  rescue
+    ArgumentError -> nil
+  end
+
   @doc false
   def validate_constraint_variables!(problem, left, right) do
     syntax_colors = IO.ANSI.syntax_colors()

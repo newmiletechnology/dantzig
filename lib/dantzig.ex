@@ -37,7 +37,47 @@ defmodule Dantzig do
   - `:mip_max_stall_nodes` - Max nodes without improvement before stalling
   - `:log_to_console` - Enable solver logging
 
-  For time/iteration limited solves, check `solution.mip_gap` for the relative gap.
+  ### Tuning options (since 1.2.0)
+
+  - `:mip_heuristic_effort` - Float in `[0.0, 1.0]`, HiGHS default `0.05`. Single highest-
+    leverage MIP tuning knob per HiGHS maintainers; controls effort spent on primal
+    heuristics during branch-and-bound.
+  - `:parallel` - One of `"off" | "choose" | "on"`, HiGHS default `"choose"`. Enables
+    parallel solver paths. As of HiGHS 1.13, MIP parallelism is limited to symmetry
+    detection, clique tables, and interior-point centre computations; LP/simplex
+    parallelism is well established.
+  - `:threads` - Integer, HiGHS default `0` (auto). Worker thread count when `parallel`
+    is enabled.
+  - `:random_seed` - Non-negative integer, HiGHS default `0`. Useful for reproducible
+    benchmark runs.
+
+  ### Warm start (since 1.2.0)
+
+  - `:mip_start` - Map of `%{var_polynomial_or_name => value}` providing a partial primal
+    solution that HiGHS adopts as the incumbent at node 0 if feasible. See
+    `Dantzig.MipStart` for details. Recommended to pair with `:mip_max_start_nodes`
+    (below) to cap repair effort on infeasible starts.
+  - `:mip_max_start_nodes` - Integer, HiGHS default unbounded. Caps the sub-MIP repair
+    effort when an infeasible MIP start is provided. A small value (e.g. `50`) is a sane
+    default — keeps an unusable start from burning solver time.
+
+  When the solve returns a `%Dantzig.Solution{}`, check `solution.warm_start_status`
+  to see whether HiGHS actually adopted the start:
+
+  - `:accepted` — start was feasible; became the incumbent at node 0
+  - `:rejected` — start was infeasible / could not yield a feasible solution; discarded
+  - `:not_provided` — no `:mip_start` option was passed
+  - `nil` — `:mip_start` was provided but HiGHS's status couldn't be determined from the
+    log (defensive fallback; should be rare)
+
+  This lets callers detect a silent no-op: a "warm-started" solve that HiGHS quietly
+  treated as cold because the start was rejected.
+
+  For time/iteration limited solves, check `solution.mip_gap` for the relative gap. As of
+  1.2.0, this is correctly populated; before 1.2.0 it was always `nil` due to a regex
+  parsing bug. The type widened from `float() | nil` to `float() | :infinity | nil`; the
+  `:infinity` sentinel is returned when HiGHS reports `Gap inf` (no feasible solution
+  found within the time limit).
 
   ## IIS (since v1.1.0)
 

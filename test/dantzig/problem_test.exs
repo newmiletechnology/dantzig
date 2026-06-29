@@ -4,7 +4,7 @@ defmodule Dantzig.ProblemTest do
 
   alias Dantzig.Problem
   alias Dantzig.Constraint
-  alias Dantzig.Polynomial
+  require Dantzig.Polynomial, as: Polynomial
 
   test "creating a problem requires specifying the optimization direction" do
     assert_raise RuntimeError, fn ->
@@ -95,6 +95,66 @@ defmodule Dantzig.ProblemTest do
       assert map_size(problem.constraints) == 1
       assert is_number(constraint.right_hand_side)
       assert constraint.right_hand_side == const2 - const1
+    end
+  end
+
+  describe "lookup_variable/2" do
+    test "returns the ProblemVariable when given the polynomial monomial" do
+      problem = Problem.new(direction: :maximize)
+      {problem, x} = Problem.new_variable(problem, "myvar", type: :integer, min: 0, max: 7)
+
+      variable = Problem.lookup_variable(problem, x)
+
+      assert variable.type == :integer
+      assert variable.min == 0
+      assert variable.max == 7
+      assert String.ends_with?(variable.name, "_myvar")
+    end
+
+    test "returns the ProblemVariable when given the mangled string name" do
+      problem = Problem.new(direction: :maximize)
+      {problem, x} = Problem.new_variable(problem, "myvar")
+      name = Polynomial.variable_name!(x)
+
+      variable = Problem.lookup_variable(problem, name)
+
+      assert variable.name == name
+    end
+
+    test "returns nil for an unknown name" do
+      problem = Problem.new(direction: :maximize)
+      {problem, _x} = Problem.new_variable(problem, "x")
+
+      assert Problem.lookup_variable(problem, "does_not_exist") == nil
+    end
+
+    test "returns nil for a constant polynomial" do
+      problem = Problem.new(direction: :maximize)
+      {problem, _x} = Problem.new_variable(problem, "x")
+
+      assert Problem.lookup_variable(problem, Polynomial.const(5)) == nil
+    end
+
+    test "returns nil for a multi-variable polynomial" do
+      Polynomial.algebra do
+        problem = Problem.new(direction: :maximize)
+        {problem, x} = Problem.new_variable(problem, "x")
+        {problem, y} = Problem.new_variable(problem, "y")
+
+        assert Problem.lookup_variable(problem, x + y) == nil
+      end
+    end
+
+    test "looks up a variable whose polynomial has a non-1 coefficient" do
+      # Lenient: variable_name! doesn't check the coefficient, so neither does this
+      Polynomial.algebra do
+        problem = Problem.new(direction: :maximize)
+        {problem, x} = Problem.new_variable(problem, "x")
+
+        variable = Problem.lookup_variable(problem, x * 3)
+        refute variable == nil
+        assert String.ends_with?(variable.name, "_x")
+      end
     end
   end
 end
