@@ -233,4 +233,53 @@ defmodule Dantzig.PolynomialTest do
       assert Polynomial.equal?(result, Polynomial.const(0))
     end
   end
+
+  describe "variable_name!/1" do
+    test "returns the name of a single-variable monomial" do
+      assert Polynomial.variable("x") |> Polynomial.variable_name!() == "x"
+      assert Polynomial.variable(:y) |> Polynomial.variable_name!() == :y
+    end
+
+    test "is lenient about the coefficient" do
+      Polynomial.algebra do
+        x = Polynomial.variable("x")
+        assert Polynomial.variable_name!(x * 2) == "x"
+        assert Polynomial.variable_name!(x * 0.5) == "x"
+        assert Polynomial.variable_name!(x * -3) == "x"
+      end
+    end
+
+    test "raises for a constant polynomial" do
+      assert_raise ArgumentError, fn ->
+        Polynomial.variable_name!(Polynomial.const(5))
+      end
+    end
+
+    test "raises for a sum of variables" do
+      Polynomial.algebra do
+        x = Polynomial.variable("x")
+        y = Polynomial.variable("y")
+
+        assert_raise ArgumentError, fn ->
+          Polynomial.variable_name!(x + y)
+        end
+      end
+    end
+
+    test "raises for a quadratic term" do
+      Polynomial.algebra do
+        x = Polynomial.variable("x")
+
+        assert_raise ArgumentError, fn ->
+          Polynomial.variable_name!(x * x)
+        end
+      end
+    end
+
+    test "raises for an empty polynomial (zero)" do
+      assert_raise ArgumentError, fn ->
+        Polynomial.variable_name!(Polynomial.const(0))
+      end
+    end
+  end
 end

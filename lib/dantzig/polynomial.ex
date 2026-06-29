@@ -513,6 +513,35 @@ defmodule Dantzig.Polynomial do
     %__MODULE__{simplified: %{[name] => 1}}
   end
 
+  @doc """
+  Returns the variable name of a single-variable monomial polynomial.
+
+  Raises `ArgumentError` if the polynomial is not a single-variable monomial —
+  i.e. a constant, a sum of variables, or a higher-degree term. The coefficient
+  is not checked, so `variable("x")` and `variable("x") |> multiply(2)` both
+  return `"x"`.
+
+  Inverse of `variable/1`. Useful when serializing problem state where variables
+  must be referenced by name (e.g. MIP-start files).
+
+  ## Examples
+
+      iex> Polynomial.variable("my_var") |> Polynomial.variable_name!()
+      "my_var"
+  """
+  @spec variable_name!(t()) :: term()
+  def variable_name!(%__MODULE__{simplified: terms}) do
+    case Map.to_list(terms) do
+      [{[name], _coeff}] ->
+        name
+
+      _other ->
+        raise ArgumentError,
+              "expected single-variable monomial, got polynomial with terms: " <>
+                inspect(terms)
+    end
+  end
+
   def term(variables, coefficient) do
     Enum.reduce(variables, const(coefficient), fn name, p ->
       multiply(p, variable(name))

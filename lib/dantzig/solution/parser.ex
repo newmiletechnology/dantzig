@@ -109,6 +109,11 @@ defmodule Dantzig.Solution.Parser do
     |> reduce(:build_variable_map)
     |> unwrap_and_tag(:constraints)
 
+  empty_constraints =
+    empty()
+    |> reduce(:build_variable_map)
+    |> unwrap_and_tag(:constraints)
+
   primal_solution_values =
     skipping_newlines.([
       ignore(
@@ -118,7 +123,7 @@ defmodule Dantzig.Solution.Parser do
       feasibility,
       objective,
       columns,
-      rows
+      choice([rows, empty_constraints])
     ])
 
   solution_file =

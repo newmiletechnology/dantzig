@@ -4,6 +4,8 @@ defmodule Dantzig.Solution do
 
   @type status :: :optimal | :time_limit | :iteration_limit
 
+  @type warm_start_status :: :accepted | :rejected | :not_provided | nil
+
   @type t :: %__MODULE__{
           model_status: String.t() | nil,
           feasibility: boolean(),
@@ -11,7 +13,8 @@ defmodule Dantzig.Solution do
           variables: %{String.t() => number()},
           constraints: %{String.t() => number()},
           status: status(),
-          mip_gap: float() | nil
+          mip_gap: float() | :infinity | nil,
+          warm_start_status: warm_start_status()
         }
 
   defstruct model_status: nil,
@@ -20,7 +23,8 @@ defmodule Dantzig.Solution do
             variables: %{},
             constraints: %{},
             status: :optimal,
-            mip_gap: nil
+            mip_gap: nil,
+            warm_start_status: nil
 
   def evaluate(%__MODULE__{} = _solution, number) when is_number(number), do: number
 

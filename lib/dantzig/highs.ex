@@ -2,9 +2,11 @@ defmodule Dantzig.HiGHS do
   @moduledoc false
 
   require Dantzig.Problem, as: Problem
+  require Logger
   alias Dantzig.Config
   alias Dantzig.Constraint
   alias Dantzig.IIS
+  alias Dantzig.MipStart
   alias Dantzig.ProblemVariable
   alias Dantzig.Solution
   alias Dantzig.Polynomial
@@ -48,31 +50,66 @@ defmodule Dantzig.HiGHS do
   def solve(%Problem{} = problem, opts \\ []) do
     iodata = to_lp_iodata(problem)
     compute_iis? = Keyword.get(opts, :compute_iis, false)
-    solve_opts = Keyword.delete(opts, :compute_iis)
+    mip_start = Keyword.get(opts, :mip_start)
+
+    solve_opts =
+      opts
+      |> Keyword.delete(:compute_iis)
+      |> Keyword.delete(:mip_start)
+
     timeout_ms = Keyword.get(opts, :time_limit, 120) * 1_000
 
-    with_temporary_files(temp_file_names(), fn paths ->
-      {model_path, solution_path, options_path} = assign_paths(paths)
+    with_temporary_files(temp_file_names(mip_start), fn paths ->
+      {model_path, solution_path, options_path, mip_start_path} = assign_paths(paths)
       File.write!(model_path, iodata)
+
+      if mip_start_path do
+        File.write!(mip_start_path, MipStart.to_iodata(problem, mip_start))
+      end
 
       # Spawn IIS computation in parallel if requested — it reads the same model file
       iis_task = if compute_iis?, do: Task.async(fn -> compute_iis_pass(model_path, opts) end)
 
-      args = build_args(model_path, solution_path, options_path, solve_opts)
+      args = build_args(model_path, solution_path, options_path, mip_start_path, solve_opts)
       {output, exit_code} = run_solver(args)
 
-      result = process_result(exit_code, output, solution_path, iodata)
+      result =
+        process_result(exit_code, output, solution_path, iodata)
+        |> add_warm_start_status(output, mip_start != nil)
 
       case result do
         {:infeasible, info} when compute_iis? ->
           iis_result = Task.await(iis_task, timeout_ms)
+          maybe_warn_infeasible_with_mip_start(mip_start)
           {:infeasible, Map.merge(info, iis_result)}
+
+        {:infeasible, _info} ->
+          if iis_task, do: Task.shutdown(iis_task, :brutal_kill)
+          maybe_warn_infeasible_with_mip_start(mip_start)
+          result
 
         _ ->
           if iis_task, do: Task.shutdown(iis_task, :brutal_kill)
           result
       end
     end)
+  end
+
+  defp add_warm_start_status({status, %Solution{} = sol}, output, mip_start_provided?) do
+    {status,
+     %{sol | warm_start_status: extract_warm_start_status(output, mip_start_provided?)}}
+  end
+
+  defp add_warm_start_status(other, _output, _mip_start_provided?), do: other
+
+  defp maybe_warn_infeasible_with_mip_start(nil), do: :ok
+
+  defp maybe_warn_infeasible_with_mip_start(_mip_start) do
+    Logger.warning(
+      "HiGHS reported :infeasible while a mip_start was provided. " <>
+        "Due to HiGHS issue #902, status reporting can be incorrect when a start is rejected. " <>
+        "Recommend a re-solve without mip_start to confirm the model itself is infeasible."
+    )
   end
 
   def to_lp_iodata(%Problem{} = problem) do
@@ -202,12 +239,17 @@ defmodule Dantzig.HiGHS do
     "write_iis_model_file = #{iis_path}\niis_strategy = 2\npresolve = off"
   end
 
-  defp temp_file_names do
-    ["model.lp", "solution.lp", "options.txt"]
-  end
+  defp temp_file_names(nil), do: ["model.lp", "solution.lp", "options.txt"]
+
+  defp temp_file_names(_mip_start),
+    do: ["model.lp", "solution.lp", "options.txt", "mip_start.sol"]
 
   defp assign_paths([model_path, solution_path, options_path]) do
-    {model_path, solution_path, options_path}
+    {model_path, solution_path, options_path, nil}
+  end
+
+  defp assign_paths([model_path, solution_path, options_path, mip_start_path]) do
+    {model_path, solution_path, options_path, mip_start_path}
   end
 
   # --- Solution Parsing ---
@@ -226,15 +268,62 @@ defmodule Dantzig.HiGHS do
     end
   end
 
-  defp extract_mip_gap(output) do
-    cond do
-      match = Regex.run(~r/Relative gap:\s*([\d.]+)/, output) ->
-        {gap, ""} = Float.parse(Enum.at(match, 1))
-        gap
+  @doc false
+  def extract_warm_start_status(_output, false = _mip_start_provided?), do: :not_provided
 
-      match = Regex.run(~r/Gap:\s*([\d.]+)%/, output) ->
-        {gap, ""} = Float.parse(Enum.at(match, 1))
+  def extract_warm_start_status(output, true = _mip_start_provided?) do
+    cond do
+      # Explicit rejection signals — check first, they're the most specific.
+      Regex.match?(
+        ~r/User-supplied values of discrete variables cannot yield feasible solution/,
+        output
+      ) ->
+        :rejected
+
+      # Defensive: documented "MIP start solution is infeasible" wording.
+      Regex.match?(~r/MIP start solution is infeasible/, output) ->
+        :rejected
+
+      # HiGHS 1.13 emits this when the start has bound/constraint
+      # infeasibilities but the repair LP still runs (instead of bailing out
+      # with the "User-supplied values cannot yield feasible solution" line).
+      # Match the assessment summary block — `Col infeasibilities <N>` or
+      # `Row infeasibilities <N>` with N > 0 (any nonzero leading digit).
+      Regex.match?(~r/Col\s+infeasibilities\s+[1-9]/, output) ->
+        :rejected
+
+      Regex.match?(~r/Row\s+infeasibilities\s+[1-9]/, output) ->
+        :rejected
+
+      # Explicit acceptance signal (HiGHS 1.13.x, appears when MIP solving runs).
+      Regex.match?(~r/MIP start solution is feasible/, output) ->
+        :accepted
+
+      # Fallback acceptance signal: HiGHS read and assessed the start. When the
+      # model is solved entirely at presolve, the explicit "MIP start solution
+      # is feasible" line isn't printed, but the assessment block always
+      # appears. If no rejection signal fired above, the start was accepted.
+      Regex.match?(~r/Assessing feasibility of MIP/, output) ->
+        :accepted
+
+      true ->
+        nil
+    end
+  end
+
+  @doc false
+  def extract_mip_gap(output) do
+    cond do
+      match = Regex.run(~r/^\s*Gap\s+(\d+\.?\d*)%/m, output) ->
+        {gap, _} = Float.parse(Enum.at(match, 1))
         gap / 100.0
+
+      Regex.match?(~r/^\s*Gap\s+inf\b/m, output) ->
+        :infinity
+
+      match = Regex.run(~r/Relative P-D gap\s*:\s*([\d.eE+\-]+)/, output) ->
+        {gap, _} = Float.parse(Enum.at(match, 1))
+        gap
 
       true ->
         nil
@@ -243,16 +332,30 @@ defmodule Dantzig.HiGHS do
 
   # --- CLI Argument Building ---
 
-  defp build_args(model_path, solution_path, options_path, opts) do
+  defp build_args(model_path, solution_path, options_path, mip_start_path, opts) do
     options_content = build_options_content(opts)
 
     [model_path, "--solution_file", solution_path]
     |> maybe_add_arg("--time_limit", Keyword.get(opts, :time_limit))
     |> maybe_add_options_file(options_content, options_path)
+    |> maybe_add_mip_start(mip_start_path)
   end
 
-  defp build_options_content(opts) do
-    file_options = [:mip_rel_gap, :log_to_console, :mip_max_stall_nodes]
+  defp maybe_add_mip_start(args, nil), do: args
+  defp maybe_add_mip_start(args, path), do: args ++ ["--read_solution_file", path]
+
+  @doc false
+  def build_options_content(opts) do
+    file_options = [
+      :mip_rel_gap,
+      :log_to_console,
+      :mip_max_stall_nodes,
+      :mip_heuristic_effort,
+      :mip_max_start_nodes,
+      :parallel,
+      :threads,
+      :random_seed
+    ]
 
     for key <- file_options,
         value = Keyword.get(opts, key),
