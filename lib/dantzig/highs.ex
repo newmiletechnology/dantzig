@@ -48,9 +48,30 @@ defmodule Dantzig.HiGHS do
            | :solution_limit, map()}
           | {:infeasible | :unbounded | :error, map()}
   def solve(%Problem{} = problem, opts \\ []) do
-    iodata = to_lp_iodata(problem)
-    compute_iis? = Keyword.get(opts, :compute_iis, false)
+    model_iodata = to_lp_iodata(problem)
     mip_start = Keyword.get(opts, :mip_start)
+    mip_start_iodata = if mip_start, do: MipStart.to_iodata(problem, mip_start)
+
+    # Never thread the raw :mip_start map past here — solve_iodata works off
+    # pre-serialized iodata so a memory-critical caller can drop the Problem.
+    solve_iodata(model_iodata, mip_start_iodata, Keyword.delete(opts, :mip_start))
+  end
+
+  @doc """
+  Solve a model that has already been serialized to LP iodata via
+  `to_lp_iodata/1`. Lets a caller serialize, drop the `Problem`, GC, and only
+  then solve — the decoder is name-based and never needs the Problem back.
+
+  Pass a pre-serialized MIP start (from `MipStart.to_iodata/2`) as the second
+  argument to warm-start; the raw `:mip_start` map is *not* accepted here.
+  """
+  def solve_iodata(model_iodata, opts \\ []) when is_list(opts) do
+    solve_iodata(model_iodata, nil, opts)
+  end
+
+  def solve_iodata(model_iodata, mip_start_iodata, opts) do
+    compute_iis? = Keyword.get(opts, :compute_iis, false)
+    mip_start_provided? = mip_start_iodata != nil
 
     solve_opts =
       opts
@@ -59,13 +80,19 @@ defmodule Dantzig.HiGHS do
 
     timeout_ms = Keyword.get(opts, :time_limit, 120) * 1_000
 
-    with_temporary_files(temp_file_names(mip_start), fn paths ->
+    with_temporary_files(temp_file_names(mip_start_iodata), fn paths ->
       {model_path, solution_path, options_path, mip_start_path} = assign_paths(paths)
-      File.write!(model_path, iodata)
+      File.write!(model_path, model_iodata)
 
       if mip_start_path do
-        File.write!(mip_start_path, MipStart.to_iodata(problem, mip_start))
+        File.write!(mip_start_path, mip_start_iodata)
       end
+
+      # The serialized model(s) are garbage from here on. Collect them before
+      # the (potentially minutes-long) System.cmd wait — a process blocked in
+      # System.cmd never GCs on its own, so this garbage would otherwise sit on
+      # the heap for the whole solve.
+      :erlang.garbage_collect()
 
       # Spawn IIS computation in parallel if requested — it reads the same model file
       iis_task = if compute_iis?, do: Task.async(fn -> compute_iis_pass(model_path, opts) end)
@@ -74,18 +101,18 @@ defmodule Dantzig.HiGHS do
       {output, exit_code} = run_solver(args)
 
       result =
-        process_result(exit_code, output, solution_path, iodata)
-        |> add_warm_start_status(output, mip_start != nil)
+        process_result(exit_code, output, solution_path, model_path)
+        |> add_warm_start_status(output, mip_start_provided?)
 
       case result do
         {:infeasible, info} when compute_iis? ->
           iis_result = Task.await(iis_task, timeout_ms)
-          maybe_warn_infeasible_with_mip_start(mip_start)
+          maybe_warn_infeasible_with_mip_start(mip_start_iodata)
           {:infeasible, Map.merge(info, iis_result)}
 
         {:infeasible, _info} ->
           if iis_task, do: Task.shutdown(iis_task, :brutal_kill)
-          maybe_warn_infeasible_with_mip_start(mip_start)
+          maybe_warn_infeasible_with_mip_start(mip_start_iodata)
           result
 
         _ ->
@@ -143,7 +170,7 @@ defmodule Dantzig.HiGHS do
 
   # --- Result Processing ---
 
-  defp process_result(exit_code, output, solution_path, model_iodata)
+  defp process_result(exit_code, output, solution_path, model_path)
        when exit_code in [0, 1] do
     case read_solution_file(solution_path) do
       {:ok, contents} ->
@@ -152,19 +179,28 @@ defmodule Dantzig.HiGHS do
         |> build_response(contents, output)
 
       :error ->
-        {:error,
-         %{reason: :no_solution, output: output, model: IO.iodata_to_binary(model_iodata)}}
+        {:error, %{reason: :no_solution, output: output, model: read_model_for_error(model_path)}}
     end
   end
 
-  defp process_result(exit_code, output, _solution_path, model_iodata) do
+  defp process_result(exit_code, output, _solution_path, model_path) do
     {:error,
      %{
        reason: :solver_error,
        exit_code: exit_code,
        output: output,
-       model: IO.iodata_to_binary(model_iodata)
+       model: read_model_for_error(model_path)
      }}
+  end
+
+  # The model file still exists here — cleanup runs `after` the solve closure
+  # returns — so re-read it lazily for error reporting instead of keeping the
+  # serialized model on the heap for the whole solve.
+  defp read_model_for_error(path) do
+    case File.read(path) do
+      {:ok, contents} -> contents
+      _ -> nil
+    end
   end
 
   defp build_response(:infeasible, _contents, output) do
@@ -348,13 +384,24 @@ defmodule Dantzig.HiGHS do
   def build_options_content(opts) do
     file_options = [
       :mip_rel_gap,
+      :mip_abs_gap,
       :log_to_console,
       :mip_max_stall_nodes,
       :mip_heuristic_effort,
       :mip_max_start_nodes,
       :parallel,
       :threads,
-      :random_seed
+      :random_seed,
+      # Memory levers. HiGHS has NO memory_limit option; these bound the
+      # solver's working set. All verified valid in HiGHS 1.12.0. NB: `presolve`
+      # is exposed as a knob but `presolve = off` typically *increases* peak
+      # memory — do not set it off expecting a memory win.
+      :mip_pool_soft_limit,
+      :mip_pool_age_limit,
+      :mip_lp_age_limit,
+      :mip_max_nodes,
+      :mip_max_leaves,
+      :presolve
     ]
 
     for key <- file_options,
