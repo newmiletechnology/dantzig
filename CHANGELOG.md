@@ -1,5 +1,33 @@
 # Changelog
 
+## v1.3 - HiGHS solver memory upgrades
+
+Reduces both BEAM- and native-side memory on the solve path.
+
+- New `Dantzig.solve_iodata/2` and `solve_iodata/3` — solve a pre-serialized LP
+  model (from `to_lp_iodata/1`) instead of a `%Problem{}`. This lets a caller
+  serialize, drop its reference to the `Problem`, `:erlang.garbage_collect()`,
+  and only then solve — so the Problem's constraints/objective aren't retained
+  on the heap during the (potentially long) solve. Solution decoding is
+  name-based and never needs the Problem back. `solve_iodata/3` takes a
+  pre-serialized MIP start (from `mip_start_to_iodata/2`) for warm starts.
+- New public serializers `Dantzig.to_lp_iodata/1` and
+  `Dantzig.mip_start_to_iodata/2` so callers can pre-serialize through the
+  public API (previously only reachable via the internal `HiGHS` module).
+- `solve/2` now serializes the model inside the temp-file closure and runs
+  `:erlang.garbage_collect()` before launching HiGHS. A process blocked in
+  `System.cmd` never GCs on its own, so the ~100+ MB of LP-serialization
+  garbage (sorted constraint list, per-polynomial fragments) previously sat on
+  the heap for the entire solve. On large models this was the single biggest
+  BEAM-side spike. Error reporting re-reads the model file lazily instead of
+  holding it in memory. No behavior change for callers; warm start unaffected.
+- New `solve/2` memory levers, all passed through to HiGHS via the options file:
+  `:mip_pool_soft_limit`, `:mip_pool_age_limit`, `:mip_lp_age_limit`,
+  `:mip_max_nodes`, `:mip_max_leaves`, `:presolve`. HiGHS has no `memory_limit`;
+  these bound its working set instead. They default to HiGHS's own defaults, so
+  existing behavior is unchanged. Note: `presolve: "off"` typically *increases*
+  peak memory — it's exposed as a knob, not a memory win.
+
 ## v1.2 - HiGHS solver upgrades
 
 - New `solve/2` tuning options: `:mip_heuristic_effort`, `:mip_max_start_nodes`,
