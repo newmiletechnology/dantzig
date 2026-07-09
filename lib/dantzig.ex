@@ -65,7 +65,7 @@ defmodule Dantzig do
   - `:random_seed` - Non-negative integer, HiGHS default `0`. Useful for reproducible
     benchmark runs.
 
-  ### Memory / working-set levers (since 1.2.0)
+  ### Memory / working-set levers (since 1.3.0)
 
   HiGHS has no `memory_limit`; these bound its working set instead. All are
   optional and validated against HiGHS 1.12.0. Treat them as knobs to *measure*,
