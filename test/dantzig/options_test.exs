@@ -11,6 +11,11 @@ defmodule Dantzig.OptionsTest do
       assert content =~ "log_to_console = true"
     end
 
+    test "emits mip_abs_gap" do
+      content = HiGHS.build_options_content(mip_abs_gap: 500.0)
+      assert content =~ "mip_abs_gap = 500.0"
+    end
+
     test "emits mip_heuristic_effort" do
       content = HiGHS.build_options_content(mip_heuristic_effort: 0.5)
       assert content =~ "mip_heuristic_effort = 0.5"
@@ -34,6 +39,25 @@ defmodule Dantzig.OptionsTest do
     test "emits random_seed" do
       content = HiGHS.build_options_content(random_seed: 42)
       assert content =~ "random_seed = 42"
+    end
+
+    test "emits memory-lever options" do
+      content =
+        HiGHS.build_options_content(
+          mip_pool_soft_limit: 1000,
+          mip_pool_age_limit: 30,
+          mip_lp_age_limit: 10,
+          mip_max_nodes: 100_000,
+          mip_max_leaves: 50_000,
+          presolve: "off"
+        )
+
+      assert content =~ "mip_pool_soft_limit = 1000"
+      assert content =~ "mip_pool_age_limit = 30"
+      assert content =~ "mip_lp_age_limit = 10"
+      assert content =~ "mip_max_nodes = 100000"
+      assert content =~ "mip_max_leaves = 50000"
+      assert content =~ "presolve = off"
     end
 
     test "emits all new options together" do

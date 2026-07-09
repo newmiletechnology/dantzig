@@ -5,8 +5,21 @@ defmodule Dantzig do
 
   alias Dantzig.HiGHS
   alias Dantzig.IIS
+  alias Dantzig.MipStart
   alias Dantzig.Problem
   alias Dantzig.Solution
+
+  @typedoc "Return type shared by `solve/2` and `solve_iodata/2,3`."
+  @type solve_result ::
+          {:optimal, Solution.t()}
+          | {:time_limit, Solution.t()}
+          | {:iteration_limit, Solution.t()}
+          | {:objective_bound, Solution.t()}
+          | {:objective_target, Solution.t()}
+          | {:solution_limit, Solution.t()}
+          | {:infeasible, %{optional(:iis) => IIS.t() | nil, output: String.t()}}
+          | {:unbounded, %{output: String.t()}}
+          | {:error, map()}
 
   @doc """
   Solves the given linear/mixed-integer problem.
@@ -34,6 +47,7 @@ defmodule Dantzig do
     Note: IIS currently only supports LP models in HiGHS; for MIP models it operates on
     the LP relaxation.
   - `:mip_rel_gap` - Relative MIP gap tolerance
+  - `:mip_abs_gap` - Absolute MIP gap tolerance, in objective units (dollars for us)
   - `:mip_max_stall_nodes` - Max nodes without improvement before stalling
   - `:log_to_console` - Enable solver logging
 
@@ -50,6 +64,24 @@ defmodule Dantzig do
     is enabled.
   - `:random_seed` - Non-negative integer, HiGHS default `0`. Useful for reproducible
     benchmark runs.
+
+  ### Memory / working-set levers (since 1.2.0)
+
+  HiGHS has no `memory_limit`; these bound its working set instead. All are
+  optional and validated against HiGHS 1.12.0. Treat them as knobs to *measure*,
+  not automatic wins.
+
+  - `:threads` - see above. `threads: 1` forces serial branch-and-bound; whether
+    it lowers native peak RSS depends on the model (larger effect on LP/IPM than
+    on MIP in HiGHS 1.12).
+  - `:parallel` - `"off"` pairs with `threads: 1` for a fully serial solve.
+  - `:mip_pool_soft_limit` - Integer. Soft cap on the cut/clique pool size;
+    lower values bound pool memory but may weaken cuts.
+  - `:mip_pool_age_limit`, `:mip_lp_age_limit` - Integers. Age-out thresholds for
+    pooled cuts / LP rows.
+  - `:mip_max_nodes`, `:mip_max_leaves` - Integers. Hard caps on the search tree.
+  - `:presolve` - `"off" | "choose" | "on"`, HiGHS default `"choose"`. Exposed
+    for completeness; note `"off"` typically *increases* peak memory and time.
 
   ### Warm start (since 1.2.0)
 
@@ -86,19 +118,61 @@ defmodule Dantzig do
   solution file for feasible models that hit a time limit. The IIS result is only included in
   the response when the problem is actually infeasible.
   """
-  @spec solve(Problem.t(), keyword()) ::
-          {:optimal, Solution.t()}
-          | {:time_limit, Solution.t()}
-          | {:iteration_limit, Solution.t()}
-          | {:objective_bound, Solution.t()}
-          | {:objective_target, Solution.t()}
-          | {:solution_limit, Solution.t()}
-          | {:infeasible, %{optional(:iis) => IIS.t() | nil, output: String.t()}}
-          | {:unbounded, %{output: String.t()}}
-          | {:error, map()}
+  @spec solve(Problem.t(), keyword()) :: solve_result()
   def solve(%Problem{} = problem, opts \\ []) do
     HiGHS.solve(problem, opts)
   end
+
+  @doc """
+  Serialize a `Problem` to LP-format iodata (the HiGHS model file contents).
+
+  Pair with `solve_iodata/2,3` to serialize a problem, drop it, and only then
+  solve — keeping the (potentially large) `Problem` off the heap during the
+  solve. See `solve_iodata/2`.
+  """
+  @spec to_lp_iodata(Problem.t()) :: iodata()
+  def to_lp_iodata(%Problem{} = problem), do: HiGHS.to_lp_iodata(problem)
+
+  @doc """
+  Serialize a MIP start (partial primal solution) to iodata for use with
+  `solve_iodata/3`. Equivalent to what `solve/2` does internally for the
+  `:mip_start` option. See `Dantzig.MipStart`.
+  """
+  @spec mip_start_to_iodata(Problem.t(), map()) :: iodata()
+  def mip_start_to_iodata(%Problem{} = problem, mip_start),
+    do: MipStart.to_iodata(problem, mip_start)
+
+  @doc """
+  Solve a pre-serialized LP model (from `to_lp_iodata/1`).
+
+  This is the memory-conscious entry point: a caller can serialize the problem,
+  release its reference to the `Problem` struct, `:erlang.garbage_collect()`,
+  and then call this — so the Problem's constraints/objective are not retained
+  on the heap during the (potentially long) solve. Solution decoding is purely
+  name-based and never needs the Problem back.
+
+      model = Dantzig.to_lp_iodata(problem)
+      problem = nil
+      :erlang.garbage_collect()
+      Dantzig.solve_iodata(model, opts)
+
+  To warm-start, pass a pre-serialized MIP start (from `mip_start_to_iodata/2`)
+  via `solve_iodata/3`. The raw `:mip_start` map is not accepted here — pass it
+  to `solve/2` instead if you still hold the `Problem`.
+
+  Returns the same result shape as `solve/2`.
+  """
+  @spec solve_iodata(iodata(), keyword()) :: solve_result()
+  def solve_iodata(model_iodata, opts \\ []) when is_list(opts),
+    do: HiGHS.solve_iodata(model_iodata, opts)
+
+  @doc """
+  Solve a pre-serialized LP model with a pre-serialized MIP start. See
+  `solve_iodata/2` and `mip_start_to_iodata/2`.
+  """
+  @spec solve_iodata(iodata(), iodata() | nil, keyword()) :: solve_result()
+  def solve_iodata(model_iodata, mip_start_iodata, opts),
+    do: HiGHS.solve_iodata(model_iodata, mip_start_iodata, opts)
 
   @doc """
   Solves the problem, raising on infeasibility, unboundedness, or solver errors.
